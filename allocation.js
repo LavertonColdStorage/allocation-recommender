@@ -168,6 +168,12 @@
       touchedLocations: touchedLocations || [],
       requiredQuantity: requiredQuantity,
       totalAllocatedQuantity: totalAllocatedQuantity,
+      // Always the real carton count of what got allocated, regardless of
+      // which metric drove the decision — an operator setting up the order
+      // in dotWMS needs this even when the requirement was given in kg, and
+      // it's the only way to see the actual overpick when rounding up to a
+      // whole pallet pushed the total past what was strictly required.
+      totalAllocatedCartons: sumByUld(picked, 'quantity'),
       shortfall: Math.max(0, requiredQuantity - totalAllocatedQuantity),
       diagnostics: diagnostics || {}
     };

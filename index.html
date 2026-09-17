@@ -587,6 +587,7 @@
     var unit = r.metric === 'weight' ? 'kg' : 'ctn';
     var html = '<span class="status ' + (full ? 'full' : 'short') + '">' +
       (full ? 'Can fulfil' : 'Short by ' + r.shortfall + ' ' + unit) + '</span>' +
+      '<div class="detail"><strong>' + r.totalAllocatedCartons + ' carton(s) to allocate</strong></div>' +
       '<div class="detail">' + r.totalAllocatedQuantity + ' / ' + r.requiredQuantity + ' ' + unit +
       ' · ' + r.touchedLocations.length + ' location(s)' +
       (r.mode === 'explicit' ? ' · specific requirement' : '') + '</div>';
