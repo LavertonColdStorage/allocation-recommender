@@ -121,21 +121,60 @@
     return total;
   }
 
+  function dedupeStrings(values) {
+    var seen = {}, out = [];
+    values.forEach(function (v) {
+      if (v === undefined || v === null || seen[v]) return;
+      seen[v] = true;
+      out.push(v);
+    });
+    return out;
+  }
+
   /**
    * Walk groups (already sorted oldest first), taking whole groups until the
    * running total meets or passes requiredQuantity. Mirrors "touch a
    * location, take everything in it" for both location-grouped and
-   * single-ULD-grouped callers.
+   * single-ULD-grouped callers. Also returns the next group that would have
+   * been touched next (the next-oldest eligible stock not needed this
+   * time), so a person can see what's waiting in the wings.
    */
   function accumulateUntilMet(groups, requiredQuantity) {
-    var picked = [], touched = [], runningTotal = 0;
-    for (var i = 0; i < groups.length && runningTotal < requiredQuantity; i++) {
+    var picked = [], touched = [], runningTotal = 0, i;
+    for (i = 0; i < groups.length && runningTotal < requiredQuantity; i++) {
       var g = groups[i];
       picked = picked.concat(g.rows);
       runningTotal += g.quantity;
       touched.push(g.label);
     }
-    return { picked: picked, touched: touched, runningTotal: runningTotal };
+    return {
+      picked: picked,
+      touched: dedupeStrings(touched),
+      runningTotal: runningTotal,
+      nextGroup: groups[i] || null
+    };
+  }
+
+  /** The single oldest row within a group — used to describe "the next ULD in line". */
+  function oldestRowIn(rows) {
+    return rows.reduce(function (best, r) {
+      if (!best) return r;
+      if (r.productionDate && (!best.productionDate || r.productionDate < best.productionDate)) return r;
+      return best;
+    }, null);
+  }
+
+  function describeNextEligible(group) {
+    if (!group || !group.rows.length) return null;
+    var oldest = oldestRowIn(group.rows);
+    return {
+      uld: oldest.uld,
+      location: oldest.location,
+      productionDate: oldest.productionDate,
+      establishment: oldest.establishment,
+      groupQuantity: group.quantity,
+      groupUldCount: dedupeUlds(group.rows).length
+    };
   }
 
   function dedupeUlds(rows) {
@@ -325,6 +364,25 @@
       return 0;
     });
 
+    /**
+     * When an oldestAllowableProductionDate cutoff is in play, this is what
+     * it actually excluded — stock that's otherwise pickable (real ULD and
+     * location, not damaged/quarantined/mixed/already allocated, passes the
+     * establishment check) but produced before the cutoff. Sorted closest
+     * to the cutoff first, since those are the ones worth a second look —
+     * a customer might accept a pallet that's only a day or two too old.
+     */
+    var excludedByDate = (oldestAllowable ? allLive.filter(function (r) {
+      return isTargetItem(r) && isPickableSpot(r) && r.productionDate && r.productionDate < oldestAllowable &&
+        (!allowedEstablishments || allowedEstablishments.indexOf(r.establishment) !== -1);
+    }) : []).map(function (r) {
+      return {
+        uld: r.uld, location: r.location, productionDate: r.productionDate,
+        establishment: r.establishment, quantity: metricValue(r, metric),
+        daysBeforeCutoff: Math.round((oldestAllowable - r.productionDate) / 86400000)
+      };
+    }).sort(function (a, b) { return b.productionDate - a.productionDate; });
+
     var explicit = request.explicit;
     var hasExplicit = explicit && (explicit.batchNumber || explicit.uld || explicit.productionDate);
 
@@ -361,7 +419,9 @@
         skippedHardRequirements: skippedHardRequirements,
         skippedAlreadyAllocated: skippedAlreadyAllocated,
         skippedDamaged: skippedDamaged,
-        flagged: flagged
+        flagged: flagged,
+        excludedByDate: excludedByDate,
+        nextEligible: describeNextEligible(explicitAcc.nextGroup)
       }, metric);
     }
 
@@ -417,7 +477,9 @@
       skippedHardRequirements: skippedHardRequirements,
       skippedAlreadyAllocated: skippedAlreadyAllocated,
       skippedDamaged: skippedDamaged,
-      flagged: flagged
+      flagged: flagged,
+      excludedByDate: excludedByDate,
+      nextEligible: describeNextEligible(acc.nextGroup)
     }, metric);
   }
 

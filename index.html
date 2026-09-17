@@ -87,6 +87,12 @@
   .flagWarning summary { cursor: pointer; font-weight: 600; }
   .flagWarning ul { margin: 6px 0 0; padding-left: 18px; }
   .flagWarning li { margin-bottom: 2px; }
+  .dateExcluded { background: var(--panel); border: 1px solid var(--accent); color: var(--ink);
+    border-radius: 8px; padding: 6px 9px; margin-top: 6px; font-size: 12px; }
+  .dateExcluded summary { cursor: pointer; font-weight: 600; color: var(--accent); }
+  .dateExcluded ul { margin: 6px 0 0; padding-left: 18px; }
+  .dateExcluded li { margin-bottom: 2px; }
+  .nextEligible { color: var(--ink-soft); font-size: 12px; margin-top: 6px; }
   .removeBtn { background: transparent; border: none; color: var(--critical); cursor: pointer; font-size: 13px; }
   details.advanced summary { cursor: pointer; font-size: 12px; color: var(--ink-soft); }
   details.advanced .grid { margin-top: 8px; }
@@ -585,25 +591,45 @@
     var r = line.result;
     var full = r.shortfall <= 0;
     var unit = r.metric === 'weight' ? 'kg' : 'ctn';
+    var fmtDate = function (d) { return d ? d.toISOString().slice(0, 10) : 'unknown date'; };
     var html = '<span class="status ' + (full ? 'full' : 'short') + '">' +
       (full ? 'Can fulfil' : 'Short by ' + r.shortfall + ' ' + unit) + '</span>' +
       '<div class="detail"><strong>' + r.totalAllocatedCartons + ' carton(s) to allocate</strong></div>' +
       '<div class="detail">' + r.totalAllocatedQuantity + ' / ' + r.requiredQuantity + ' ' + unit +
-      ' · ' + r.touchedLocations.length + ' location(s)' +
+      ' · ' + r.uldNumbers.length + ' ULD(s) from ' + r.touchedLocations.length + ' location(s)' +
       (r.mode === 'explicit' ? ' · specific requirement' : '') + '</div>';
     var uldList = r.uldNumbers.map(function (u) {
       return (r.uldComments && r.uldComments[u]) ? (u + ' (' + r.uldComments[u] + ')') : u;
     }).join(', ');
     html += '<details class="lineDiag"><summary>' + r.uldNumbers.length + ' ULD(s)</summary>' +
       '<div class="ulds">' + (uldList || '-') + '</div></details>';
+
+    var next = r.diagnostics && r.diagnostics.nextEligible;
+    if (next) {
+      html += '<div class="nextEligible">Next oldest not needed: ' + next.uld + ' at ' + (next.location || '-') +
+        ', produced ' + fmtDate(next.productionDate) +
+        (next.groupUldCount > 1 ? ' (' + next.groupUldCount + ' ULDs at that location)' : '') + '</div>';
+    }
+
     var flagged = (r.diagnostics && r.diagnostics.flagged) || [];
     if (flagged.length) {
       html += '<details class="flagWarning" open><summary>⚠ ' + flagged.length +
         ' otherwise-compliant pallet(s) excluded - check before allocating</summary><ul>' +
         flagged.map(function (f) {
           return '<li>' + f.uld + ' at ' + (f.location || '-') +
-            (f.productionDate ? ', produced ' + f.productionDate.toISOString().slice(0, 10) : '') +
+            ', produced ' + fmtDate(f.productionDate) +
             ' - ' + f.reasons.join(', ') + '</li>';
+        }).join('') + '</ul></details>';
+    }
+
+    var excludedByDate = (r.diagnostics && r.diagnostics.excludedByDate) || [];
+    if (excludedByDate.length) {
+      html += '<details class="dateExcluded" open><summary>' + excludedByDate.length +
+        ' pallet(s) excluded by the oldest-allowable-date cutoff</summary><ul>' +
+        excludedByDate.map(function (f) {
+          return '<li>' + f.uld + ' at ' + (f.location || '-') +
+            ', produced ' + fmtDate(f.productionDate) +
+            ' - ' + f.daysBeforeCutoff + ' day(s) too old</li>';
         }).join('') + '</ul></details>';
     }
     cell.innerHTML = html;
