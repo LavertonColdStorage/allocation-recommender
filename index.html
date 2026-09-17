@@ -594,10 +594,11 @@
     var fmtDate = function (d) { return d ? d.toISOString().slice(0, 10) : 'unknown date'; };
     var html = '<span class="status ' + (full ? 'full' : 'short') + '">' +
       (full ? 'Can fulfil' : 'Short by ' + r.shortfall + ' ' + unit) + '</span>' +
-      '<div class="detail"><strong>' + r.totalAllocatedCartons + ' carton(s) to allocate</strong></div>' +
-      '<div class="detail">' + r.totalAllocatedQuantity + ' / ' + r.requiredQuantity + ' ' + unit +
-      ' · ' + r.uldNumbers.length + ' ULD(s) from ' + r.touchedLocations.length + ' location(s)' +
-      (r.mode === 'explicit' ? ' · specific requirement' : '') + '</div>';
+      '<div class="detail"><strong>' + r.cartonsForOrderEntry + ' carton(s) to enter on the sales order</strong></div>' +
+      '<div class="detail">' + r.uldNumbers.length + ' ULD(s) tagged for allocation (' + r.totalAllocatedCartons +
+      ' ctn) from ' + r.touchedLocations.length + ' location(s)' +
+      (r.mode === 'explicit' ? ' · specific requirement' : '') + '</div>' +
+      '<div class="detail">' + r.totalAllocatedQuantity + ' / ' + r.requiredQuantity + ' ' + unit + ' covered</div>';
     var uldList = r.uldNumbers.map(function (u) {
       return (r.uldComments && r.uldComments[u]) ? (u + ' (' + r.uldComments[u] + ')') : u;
     }).join(', ');

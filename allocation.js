@@ -196,6 +196,36 @@
     return comments;
   }
 
+  /**
+   * `picked` deliberately over-includes stock: touching a "Located" location
+   * tags every pallet sitting there, not just the ones needed, so an
+   * operator grabs whichever pallet is closest instead of hunting through
+   * the location for a specific one. totalAllocatedCartons reflects that
+   * full sweep — but the quantity typed into the dotWMS sales order line
+   * must not be inflated by it. This walks the same picked stock oldest
+   * pallet first, ignoring location boundaries, and stops the moment the
+   * running total first meets the requirement — the minimal number of
+   * whole pallets, rounded up, that actually covers the order.
+   */
+  function cartonsForOrderEntry(picked, requiredQuantity, metric) {
+    var sorted = picked.slice().sort(function (a, b) {
+      if (a.productionDate && b.productionDate) return a.productionDate - b.productionDate;
+      if (a.productionDate) return -1;
+      if (b.productionDate) return 1;
+      return 0;
+    });
+    var seen = {}, runningMetric = 0, cartons = 0, i, r, key;
+    for (i = 0; i < sorted.length && runningMetric < requiredQuantity; i++) {
+      r = sorted[i];
+      key = r.uld || ('#' + i);
+      if (seen[key]) continue;
+      seen[key] = true;
+      runningMetric += metricValue(r, metric);
+      cartons += metricValue(r, 'quantity');
+    }
+    return cartons;
+  }
+
   function buildResult(mode, picked, requiredQuantity, touchedLocations, diagnostics, metric) {
     var totalAllocatedQuantity = sumByUld(picked, metric);
     return {
@@ -207,12 +237,14 @@
       touchedLocations: touchedLocations || [],
       requiredQuantity: requiredQuantity,
       totalAllocatedQuantity: totalAllocatedQuantity,
-      // Always the real carton count of what got allocated, regardless of
-      // which metric drove the decision — an operator setting up the order
-      // in dotWMS needs this even when the requirement was given in kg, and
-      // it's the only way to see the actual overpick when rounding up to a
-      // whole pallet pushed the total past what was strictly required.
+      // The real carton count of every pallet TAGGED for allocation,
+      // regardless of which metric drove the decision — includes the whole-
+      // location overpick. This is what's in the CSV, not what goes in the
+      // sales order quantity field (see cartonsForOrderEntry below).
       totalAllocatedCartons: sumByUld(picked, 'quantity'),
+      // What to actually key into the dotWMS sales order line: the minimal
+      // whole pallets needed, not the whole-location sweep above.
+      cartonsForOrderEntry: cartonsForOrderEntry(picked, requiredQuantity, metric),
       shortfall: Math.max(0, requiredQuantity - totalAllocatedQuantity),
       diagnostics: diagnostics || {}
     };
