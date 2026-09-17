@@ -50,7 +50,7 @@
 
   .banner { border-radius: var(--radius); padding: 10px 14px; margin-bottom: 16px;
     border: 1px solid var(--line); background: var(--panel); font-size: 14px; }
-  .banner.demo { background: var(--serious-bg); border-color: var(--serious); color: var(--serious); }
+  .banner.empty { background: var(--serious-bg); border-color: var(--serious); color: var(--serious); }
   .banner.error { background: var(--critical-bg); border-color: var(--critical); color: var(--critical); }
   .banner.live { background: var(--panel); }
   .banner.notice { background: var(--serious-bg); border-color: var(--serious); color: var(--serious); font-size: 13px; }
@@ -126,14 +126,14 @@
 </header>
 
 <main>
-  <div id="banner" class="banner demo">Showing demo data.</div>
+  <div id="banner" class="banner empty">No stock data loaded yet - load a CSV below.</div>
 
   <div class="panel">
     <h2>Getting the export from dotWMS</h2>
     <p class="hint">
       Run <a href="https://au15.dotwms.com/?module=packing&amp;submodule=reporting_genericreports&amp;key=1341" target="_blank" rel="noopener">Stock On Hand – ULD</a>
-      in dotWMS (opens in a new tab — log in first if needed), filtered to the warehouse/tenant you need.
-      dotWMS exports this as <strong>.xlsx</strong>, not CSV — open it and use
+      in dotWMS (opens in a new tab - log in first if needed), filtered to the warehouse/tenant you need.
+      dotWMS exports this as <strong>.xlsx</strong>, not CSV - open it and use
       <strong>File → Save As → CSV UTF-8 (Comma delimited) (*.csv)</strong> before loading it below.
       A plain "CSV" save can mangle special characters; UTF-8 is the one that doesn't.
     </p>
@@ -141,7 +141,7 @@
 
   <div class="panel">
     <h2>Load stock data from a file</h2>
-    <p class="hint">No API, no waiting on the nightly push — freshness is entirely up to when you last exported.</p>
+    <p class="hint">No API, no waiting on the nightly push - freshness is entirely up to when you last exported.</p>
     <div class="grid">
       <div class="field"><label for="stockFileInput">Stock on hand CSV</label><input type="file" id="stockFileInput" accept=".csv,text/csv"></div>
     </div>
@@ -157,7 +157,7 @@
 
   <div class="panel">
     <h2>Order</h2>
-    <p class="hint">Pick the tenant and warehouse once, then add a line per item. Oldest-production-date-first, whole ULDs only, whole locations touched, mixed-SKU locations excluded — unless an item's specific requirement below says otherwise.</p>
+    <p class="hint">Pick the tenant and warehouse once, then add a line per item. Oldest-production-date-first, whole ULDs only, whole locations touched, mixed-SKU locations excluded - unless an item's specific requirement below says otherwise.</p>
     <div class="grid">
       <div class="field"><label for="tenantSelect">Tenant</label><select id="tenantSelect"><option value="">Select tenant…</option></select></div>
       <div class="field"><label for="warehouseSelect">Warehouse</label>
@@ -183,8 +183,8 @@
     </table>
     <div class="actions">
       <button id="addLineBtn">+ Add line</button>
-      <button id="checkAllBtn" class="primary">Check fulfilment — all lines</button>
-      <button id="downloadAllBtn" disabled>Download bulk allocation CSV — whole order</button>
+      <button id="checkAllBtn" class="primary">Check fulfilment - all lines</button>
+      <button id="downloadAllBtn" disabled>Download bulk allocation CSV - whole order</button>
     </div>
 
     <div class="stat-row" id="orderStats" hidden></div>
@@ -194,7 +194,7 @@
 <dialog id="connectDlg">
   <form method="dialog" class="dlg-body" id="connectForm">
     <h2>Connect to the Worker</h2>
-    <p>Same Worker the stock-checks dashboard uses — the stock and item master snapshots dotWMS pushes.</p>
+    <p>Same Worker the stock-checks dashboard uses - the stock and item master snapshots dotWMS pushes.</p>
     <div class="field">
       <label for="urlInput">Worker URL</label>
       <input type="url" id="urlInput" placeholder="https://dotwms-stock-checks.matthew-rowe1982.workers.dev">
@@ -206,7 +206,6 @@
     <div class="test-result" id="testResult"></div>
     <div class="dlg-actions">
       <button type="button" id="testBtn">Test</button>
-      <button type="button" id="demoBtn">Use demo data</button>
       <button type="submit" class="primary" id="saveBtn">Save &amp; load</button>
     </div>
   </form>
@@ -246,38 +245,6 @@
   var lines = [];       // { id, itemCode, metric, qty, result }
   var nextLineId = 1;
 
-  // -------------------------------------------------------------------------
-  // Demo data
-  // -------------------------------------------------------------------------
-  function demoRows() {
-    function r(o) {
-      return {
-        _i: Math.random(), tenantCode: o.tenant, itemCode: o.item, warehouseId: 'LEAKES',
-        location: o.loc, uld: o.uld, batchNumber: o.batch,
-        quantity: o.qty, availableQuantity: o.qty, weight: o.weight,
-        establishment: o.est,
-        productionDate: o.prod ? new Date(o.prod) : null,
-        status: 'AVAILABLE',
-        palletStatus: o.palletStatus || 'Located',
-        disposition: o.disposition || 'Available',
-        palletType: o.palletType
-      };
-    }
-    return [
-      r({ tenant: 'MID', item: 'BEEF85', loc: 'A-01-01', uld: 'P0001', batch: 'B100', qty: 24, weight: 480, prod: '2026-07-01', est: 'EST100' }),
-      r({ tenant: 'MID', item: 'BEEF85', loc: 'A-01-01', uld: 'P0002', batch: 'B100', qty: 24, weight: 470, prod: '2026-07-01', est: 'EST100' }),
-      r({ tenant: 'MID', item: 'BEEF85', loc: 'A-01-02', uld: 'P0003', batch: 'B101', qty: 20, weight: 400, prod: '2026-07-15', est: 'EST100' }),
-      r({ tenant: 'MID', item: 'BEEF85', loc: 'A-02-01', uld: 'P0004', batch: 'B098', qty: 18, weight: 360, prod: '2026-06-10', est: 'EST200' }),
-      r({ tenant: 'MID', item: 'LAMB12', loc: 'A-02-01', uld: 'P0005', batch: 'L050', qty: 18, weight: 200, prod: '2026-06-12', est: 'EST100' }),
-      // A couple of work-in-progress spots, to demo the single-ULD / BLAST behaviour.
-      r({ tenant: 'MID', item: 'BEEF85', loc: 'No Location', uld: 'P0006', qty: 22, weight: 440, prod: '2026-06-05', est: 'EST100', palletStatus: 'Pending Putaway' }),
-      r({ tenant: 'MID', item: 'BEEF85', loc: 'SMC', uld: 'T0001', qty: 1, weight: 19, prod: '2026-06-01', est: 'EST100', palletStatus: '' }),
-      r({ tenant: 'MID', item: 'BEEF85', loc: 'DAMAGE', uld: 'P0007', qty: 5, weight: 90, prod: '2026-05-01', est: 'EST100', disposition: 'Damaged' }),
-      // An older, otherwise-compliant pallet held in Quarantine — shows the
-      // "flagged, check before allocating" warning even though it's not used.
-      r({ tenant: 'MID', item: 'BEEF85', loc: 'A-03-01', uld: 'P0008', qty: 20, weight: 400, prod: '2026-05-20', est: 'EST100', disposition: 'Quarantine' })
-    ];
-  }
   // -------------------------------------------------------------------------
   // Live fetch — same slice/manifest pattern as leakes-stock-checks.html.
   // -------------------------------------------------------------------------
@@ -326,21 +293,20 @@
     var base = settings.url.replace(/\/+$/, '');
     var q = '?token=' + encodeURIComponent(settings.token);
     var progress = function (kind, n, count, meta) {
-      setBanner('live', 'Downloading the ' + kind + ' snapshot — slice ' + n + ' of ' + count +
+      setBanner('live', 'Downloading the ' + kind + ' snapshot - slice ' + n + ' of ' + count +
         ' (' + Math.round((meta.totalBytes || 0) / 1048576) + ' MB)…');
     };
     setBanner('live', 'Asking the Worker what it has…');
     fetchSnapshotText(base, q, 'stock', progress).then(function (stock) {
       if (!stock) throw new Error('No stock snapshot has been pushed yet.');
       state.stockRows = SC.parseStockText(stock.text).rows;
-      setBanner('live', 'Live — ' + state.stockRows.length + ' stock rows loaded (' +
+      setBanner('live', 'Live - ' + state.stockRows.length + ' stock rows loaded (' +
         (stock.meta.pushedAt ? new Date(stock.meta.pushedAt).toLocaleString() : 'unknown time') + ').');
       $('sourceLine').textContent = 'Connected: ' + base;
       populateWarehouses();
       populateTenants();
     }).catch(function (err) {
       setBanner('error', 'Could not load live data: ' + err.message);
-      useDemo();
     });
   }
 
@@ -372,7 +338,7 @@
         'Recognised: ' + Object.keys(parsed.mapping).join(', ') + '\n\n' +
         (missing.length ? 'Not found (checks needing these are skipped): ' + missing.join(', ') : 'All known fields found.');
 
-      setBanner('live', 'Loaded from file — ' + state.stockRows.length + ' stock rows (' + stockFile.name + ').');
+      setBanner('live', 'Loaded from file - ' + state.stockRows.length + ' stock rows (' + stockFile.name + ').');
       $('sourceLine').textContent = 'File: ' + stockFile.name;
       $('fileLoadStatus').textContent = 'Loaded ' + new Date().toLocaleTimeString() + '.';
       populateWarehouses();
@@ -384,10 +350,10 @@
 
   $('loadFilesBtn').addEventListener('click', loadFromFiles);
 
-  function useDemo() {
-    state.stockRows = demoRows();
-    setBanner('demo', 'Showing demo data. Connect to the Worker for real stock.');
-    $('sourceLine').textContent = 'Demo data';
+  function showNoDataYet() {
+    state.stockRows = [];
+    setBanner('empty', 'No stock data loaded yet - load a CSV below, or connect to the Worker.');
+    $('sourceLine').textContent = 'No data loaded';
     populateWarehouses();
     populateTenants();
   }
@@ -458,7 +424,7 @@
     items.forEach(function (it) {
       var o = document.createElement('option');
       o.value = it.itemCode;
-      o.textContent = it.itemName ? (it.itemCode + ' — ' + it.itemName) : it.itemCode;
+      o.textContent = it.itemName ? (it.itemCode + ' - ' + it.itemName) : it.itemCode;
       select.appendChild(o);
     });
     if (items.some(function (it) { return it.itemCode === current; })) select.value = current;
@@ -628,15 +594,15 @@
       return (r.uldComments && r.uldComments[u]) ? (u + ' (' + r.uldComments[u] + ')') : u;
     }).join(', ');
     html += '<details class="lineDiag"><summary>' + r.uldNumbers.length + ' ULD(s)</summary>' +
-      '<div class="ulds">' + (uldList || '—') + '</div></details>';
+      '<div class="ulds">' + (uldList || '-') + '</div></details>';
     var flagged = (r.diagnostics && r.diagnostics.flagged) || [];
     if (flagged.length) {
       html += '<details class="flagWarning" open><summary>⚠ ' + flagged.length +
-        ' otherwise-compliant pallet(s) excluded — check before allocating</summary><ul>' +
+        ' otherwise-compliant pallet(s) excluded - check before allocating</summary><ul>' +
         flagged.map(function (f) {
-          return '<li>' + f.uld + ' at ' + (f.location || '—') +
+          return '<li>' + f.uld + ' at ' + (f.location || '-') +
             (f.productionDate ? ', produced ' + f.productionDate.toISOString().slice(0, 10) : '') +
-            ' — ' + f.reasons.join(', ') + '</li>';
+            ' - ' + f.reasons.join(', ') + '</li>';
         }).join('') + '</ul></details>';
     }
     cell.innerHTML = html;
@@ -664,7 +630,7 @@
     stat('', checked.length + ' / ' + lines.length, 'Lines checked');
     stat(short ? 'shortfall' : 'ok', short, 'Lines short');
     stat('', totalUlds, 'Total ULDs to allocate');
-    if (totalFlagged) stat('shortfall', totalFlagged, 'Flagged — check before allocating');
+    if (totalFlagged) stat('shortfall', totalFlagged, 'Flagged - check before allocating');
   }
 
   $('addLineBtn').addEventListener('click', addLine);
@@ -701,12 +667,6 @@
     $('testResult').textContent = '';
     dlg.showModal();
   });
-  $('demoBtn').addEventListener('click', function () {
-    settings = { url: '', token: '' };
-    saveSettings();
-    dlg.close();
-    useDemo();
-  });
   $('testBtn').addEventListener('click', function () {
     var base = $('urlInput').value.trim().replace(/\/+$/, '');
     if (!base) { $('testResult').textContent = 'Enter a Worker URL first.'; return; }
@@ -719,14 +679,14 @@
     settings.url = $('urlInput').value.trim();
     settings.token = $('tokenInput').value.trim();
     saveSettings();
-    if (settings.url && settings.token) loadLive(); else useDemo();
+    if (settings.url && settings.token) loadLive(); else showNoDataYet();
   });
   $('refreshBtn').addEventListener('click', function () {
-    if (settings.url && settings.token) loadLive(); else useDemo();
+    if (settings.url && settings.token) loadLive(); else showNoDataYet();
   });
 
   // -------------------------------------------------------------------------
-  if (settings.url && settings.token) loadLive(); else useDemo();
+  if (settings.url && settings.token) loadLive(); else showNoDataYet();
   addLine();
 })();
 </script>
