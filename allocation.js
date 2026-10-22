@@ -462,14 +462,46 @@
     // Work-in-progress spots (Pending Putaway, Staging, SMC, robot
     // locations) are picked one ULD at a time regardless of what else is
     // sitting there, so mixed-SKU exclusion doesn't apply to them at all.
+    //
+    // request.allowMixedLocations (HelloFresh, 2026-10-22): a pallet in a
+    // mixed-SKU location is offered as a single-ULD pick instead of being
+    // dropped. Matt: HelloFresh product is only put away in double-deep
+    // locations, so the worst case is moving one pallet to reach another.
+    var allowMixed = !!request.allowMixedLocations;
     var wholeLocationCandidates = candidates.filter(function (r) {
       return usesWholeLocationClearing(r) && !isMixedLocation(r.location);
     });
-    var singleUldCandidates = candidates.filter(function (r) { return !usesWholeLocationClearing(r); });
+    var singleUldCandidates = candidates.filter(function (r) {
+      return !usesWholeLocationClearing(r) || (allowMixed && isMixedLocation(r.location));
+    });
 
     var mixedLocationsSkipped = {};
+    // The actual pallets lost to that rule. A Located pallet of the right
+    // SKU sitting in a slot another SKU also occupies is dropped from BOTH
+    // candidate lists above — it can't be swept (mixed location) and it
+    // isn't a single-ULD spot. That is real, compliant stock going unseen,
+    // so name it rather than leaving the operator to wonder.
+    var mixedLocationPallets = [];
     candidates.forEach(function (r) {
-      if (usesWholeLocationClearing(r) && isMixedLocation(r.location)) mixedLocationsSkipped[r.location] = true;
+      if (!allowMixed && usesWholeLocationClearing(r) && isMixedLocation(r.location)) {
+        mixedLocationsSkipped[r.location] = true;
+        mixedLocationPallets.push({
+          uld: r.uld,
+          location: r.location,
+          productionDate: r.productionDate,
+          establishment: r.establishment,
+          quantity: metricValue(r, metric),
+          otherItems: Object.keys(locationSkus[r.location] || {}).filter(function (code) {
+            return code !== r.itemCode;
+          })
+        });
+      }
+    });
+    mixedLocationPallets.sort(function (a, b) {
+      if (a.productionDate && b.productionDate) return a.productionDate - b.productionDate;
+      if (a.productionDate) return -1;
+      if (b.productionDate) return 1;
+      return String(a.uld).localeCompare(String(b.uld));
     });
 
     var byLocation = {};
@@ -505,6 +537,7 @@
       eligibleLocations: locationGroups.length,
       eligibleSingleUlds: singleGroups.length,
       mixedLocationsSkipped: Object.keys(mixedLocationsSkipped),
+      mixedLocationPallets: mixedLocationPallets,
       skippedNoUldOrLocation: skippedNoUldOrLocation,
       skippedHardRequirements: skippedHardRequirements,
       skippedAlreadyAllocated: skippedAlreadyAllocated,
@@ -513,6 +546,276 @@
       excludedByDate: excludedByDate,
       nextEligible: describeNextEligible(acc.nextGroup)
     }, metric);
+  }
+
+  // ===========================================================================
+  // HELLOFRESH ORDERS (2026-10-22)
+  //
+  // HelloFresh want every pallet they receive rebuilt to exactly 40 cartons
+  // (config.palletSize), one item code, one production DAY. We don't store
+  // stock in 40s, so for a HelloFresh order stored pallets are broken down
+  // and re-stacked. The rules, as given by Matt:
+  //
+  //   - Normal eligibility still applies (no damaged/quarantined/mixed
+  //     pallets, no already-allocated stock, date/establishment cutoffs) —
+  //     reused from recommendAllocation. EXCEPT mixed-SKU locations ARE used:
+  //     HelloFresh product only goes into double-deep locations, so at worst
+  //     one pallet is moved to reach another (Matt, 2026-10-22).
+  //   - Oldest production day first. From each day build as many full 40s as
+  //     the order still needs; a day that can't make another full 40 is left
+  //     behind and FLAGGED as a leftover, not silently skipped.
+  //   - At most ONE pallet per item may mix two days (load all of one day,
+  //     top up from the next) — only to complete the order when clean 40s
+  //     can't. It's an exception, marked as such.
+  //   - A pallet under 40 only when stock runs out, or the ordered quantity
+  //     isn't a multiple of 40.
+  //   - Within a day, take whole stored pallets first; break as few as
+  //     possible.
+  //
+  // Dates: the "Stock On Hand - ULD" export gives each pallet ONE date (its
+  // oldest carton). If a Detailed (one row per carton) export is supplied,
+  // its carton dates are used instead, so a pallet holding two days is split
+  // correctly. Without it, a pallet is assumed to be all its oldest-carton
+  // date — the result says which source was used.
+  // ===========================================================================
+
+  function dayKey(d) {
+    if (!d) return '';
+    var m = d.getMonth() + 1, day = d.getDate();
+    return d.getFullYear() + '-' + (m < 10 ? '0' : '') + m + '-' + (day < 10 ? '0' : '') + day;
+  }
+
+  function normaliseHeader(h) {
+    return String(h || '').replace(/^"|"$/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+
+  function stripExcelQuote(v) {
+    return String(v === undefined || v === null ? '' : v).trim().replace(/^'/, '');
+  }
+
+  /**
+   * Builds { uld -> { 'YYYY-MM-DD' -> cartons } } from a Detailed export
+   * (one row per carton: ..., ULD, CARTON DATE, ...). Needs StockChecks for
+   * CSV splitting and date parsing. Skips one-cell title rows like the ULD
+   * export's "Stock On Hand - ULD,,,," preamble.
+   */
+  function buildCartonDateIndex(text, SC) {
+    var iUld = -1, iDate = -1, header = false, index = {}, cartons = 0, ulds = 0;
+    SC.forEachCsvRecord(text, null, function (values) {
+      if (!header) {
+        var h = values.map(normaliseHeader);
+        var u = h.indexOf('uld'), d = -1;
+        ['cartondate', 'productiondate', 'packdate', 'proddate', 'oldestcarton'].some(function (name) {
+          d = h.indexOf(name);
+          return d !== -1;
+        });
+        if (u !== -1 && d !== -1) { iUld = u; iDate = d; header = true; }
+        return;
+      }
+      var uld = stripExcelQuote(values[iUld]);
+      var date = SC.parseDate(stripExcelQuote(values[iDate]));
+      if (!uld || !date) return;
+      var key = dayKey(date);
+      if (!index[uld]) { index[uld] = {}; ulds++; }
+      index[uld][key] = (index[uld][key] || 0) + 1;
+      cartons++;
+    });
+    return { found: header, byUld: index, cartons: cartons, ulds: ulds };
+  }
+
+  /** Choose stored pallets totalling exactly `need` cartons, breaking as few as possible. */
+  function chooseSources(sources, need) {
+    var pool = sources.filter(function (s) { return s.remaining > 0; })
+      .sort(function (a, b) { return b.remaining - a.remaining || String(a.uld).localeCompare(String(b.uld)); });
+    var takes = [], left = need, used = {};
+    pool.forEach(function (s, i) {
+      if (left > 0 && s.remaining <= left) { takes.push({ src: s, take: s.remaining }); left -= s.remaining; used[i] = true; }
+    });
+    if (left > 0) {
+      // Break exactly one pallet: the smallest one big enough to finish the job.
+      var best = -1;
+      pool.forEach(function (s, i) {
+        if (!used[i] && s.remaining >= left && (best === -1 || s.remaining < pool[best].remaining)) best = i;
+      });
+      if (best !== -1) { takes.push({ src: pool[best], take: left }); left = 0; }
+    }
+    return takes;
+  }
+
+  /**
+   * @param rows, request, config — exactly as recommendAllocation. Extra
+   *   request fields: .cartonDates (from buildCartonDateIndex, optional).
+   *   Always counts cartons (request.metric is ignored).
+   */
+  function recommendHelloFresh(rows, request, config) {
+    var palletSize = (config && config.palletSize) || 40;
+    var required = Math.max(0, Math.floor(request.requiredQuantity || 0));
+
+    // Everything eligible, using the normal rules: ask for "infinitely many"
+    // cartons and the normal engine returns every eligible pallet.
+    var baseReq = {};
+    Object.keys(request).forEach(function (k) { baseReq[k] = request[k]; });
+    baseReq.requiredQuantity = Infinity;
+    baseReq.metric = 'quantity';
+    baseReq.allowMixedLocations = true;   // HelloFresh: double-deep putaway, see above
+    var base = recommendAllocation(rows, baseReq, config);
+
+    var detail = request.cartonDates && request.cartonDates.byUld ? request.cartonDates.byUld : null;
+    var detailMismatches = [];
+
+    // One "source" per stored pallet per production day.
+    var byDay = {}, seenUld = {};
+    base.rows.forEach(function (r) {
+      if (!r.uld || seenUld[r.uld]) return;
+      seenUld[r.uld] = true;
+      var cartons = metricValue(r, 'quantity');
+      var split = detail && detail[r.uld];
+      var parts = [];
+      if (split) {
+        var detailTotal = 0;
+        Object.keys(split).forEach(function (k) { detailTotal += split[k]; });
+        if (detailTotal !== cartons) detailMismatches.push({ uld: r.uld, location: r.location, uldReport: cartons, detailed: detailTotal });
+        Object.keys(split).forEach(function (k) { parts.push({ day: k, cartons: split[k] }); });
+      } else {
+        parts.push({ day: dayKey(r.productionDate) || 'no date', cartons: cartons });
+      }
+      parts.forEach(function (p) {
+        if (!byDay[p.day]) byDay[p.day] = { day: p.day, sources: [] };
+        byDay[p.day].sources.push({
+          uld: r.uld, location: r.location, day: p.day, cartons: p.cartons, remaining: p.cartons,
+          uldCartons: cartons, multiDay: !!split && Object.keys(split).length > 1, smc: isSmcLocation(r.location)
+        });
+      });
+    });
+    var days = Object.keys(byDay).sort(function (a, b) {
+      if (a === 'no date') return 1;
+      if (b === 'no date') return -1;
+      return a < b ? -1 : a > b ? 1 : 0;
+    }).map(function (k) { return byDay[k]; });
+    function available(d) { return d.sources.reduce(function (t, s) { return t + s.remaining; }, 0); }
+
+    var pallets = [], need = required, exceptionUsed = false;
+
+    function addPallet(parts, kind, reason) {
+      var lines = [];
+      parts.forEach(function (p) {
+        chooseSources(p.day.sources, p.take).forEach(function (t) {
+          t.src.remaining -= t.take;
+          lines.push({
+            uld: t.src.uld, location: t.src.location, day: t.src.day, take: t.take,
+            uldCartons: t.src.uldCartons, wholePallet: t.take === t.src.uldCartons, multiDay: t.src.multiDay
+          });
+        });
+      });
+      var cartons = lines.reduce(function (s, l) { return s + l.take; }, 0);
+      pallets.push({
+        number: pallets.length + 1,
+        days: dedupeStrings(lines.map(function (l) { return l.day; })),
+        cartons: cartons, kind: kind, reason: reason || '', lines: lines
+      });
+      need -= cartons;
+    }
+
+    // 1. Full single-day pallets, oldest day first. Everything a day has to
+    // supply is chosen in one go (so the fewest stored pallets are broken
+    // across the whole day, not per 40), then cut into 40s in order.
+    days.forEach(function (d) {
+      var count = Math.min(Math.floor(available(d) / palletSize), Math.floor(need / palletSize));
+      if (count < 1) return;
+      var queue = chooseSources(d.sources, count * palletSize).map(function (t) { return { src: t.src, left: t.take }; });
+      for (var p = 0; p < count; p++) {
+        var lines = [], room = palletSize;
+        while (room > 0 && queue.length) {
+          var q = queue[0], take = Math.min(q.left, room);
+          q.src.remaining -= take;
+          lines.push({
+            uld: q.src.uld, location: q.src.location, day: q.src.day, take: take,
+            uldCartons: q.src.uldCartons, wholePallet: take === q.src.uldCartons, multiDay: q.src.multiDay
+          });
+          q.left -= take; room -= take;
+          if (!q.left) queue.shift();
+        }
+        pallets.push({ number: pallets.length + 1, days: [d.day], cartons: palletSize, kind: 'full', reason: '', lines: lines });
+        need -= palletSize;
+      }
+    });
+
+    // 2. Whatever is still needed.
+    if (need > 0) {
+      var target = Math.min(need, palletSize);
+      var single = null;
+      for (var i = 0; i < days.length; i++) if (available(days[i]) >= target) { single = days[i]; break; }
+      if (single) {
+        addPallet([{ day: single, take: target }], 'short',
+          'Order quantity is not a multiple of ' + palletSize + ' - last pallet is ' + target + ' cartons');
+      } else {
+        var withStock = days.filter(function (d) { return available(d) > 0; });
+        if (withStock.length >= 2) {
+          var a = withStock[0], b = withStock[1];
+          var takeA = Math.min(available(a), target);
+          var takeB = Math.min(available(b), target - takeA);
+          exceptionUsed = true;
+          addPallet([{ day: a, take: takeA }, { day: b, take: takeB }], 'exception',
+            'Two production days on one pallet - the one exception allowed per item' +
+            (takeA + takeB < palletSize ? ' (and short: not enough stock left)' : ''));
+        } else if (withStock.length === 1) {
+          addPallet([{ day: withStock[0], take: Math.min(available(withStock[0]), target) }], 'short',
+            'Short pallet - no more eligible stock');
+        }
+      }
+    }
+
+    // Leftovers: days OLDER than the newest day used that still hold stock -
+    // older cartons the order passed over. What's left on the newest day
+    // itself is just stock the order didn't need, not a leftover.
+    var newestUsed = pallets.reduce(function (m, p) {
+      return p.days.reduce(function (mm, d) { return d > mm ? d : mm; }, m);
+    }, '');
+    var leftovers = days.filter(function (d) { return d.day !== 'no date' && d.day < newestUsed && available(d) > 0; })
+      .map(function (d) {
+        return {
+          day: d.day, cartons: available(d),
+          ulds: d.sources.filter(function (s) { return s.remaining > 0; })
+            .map(function (s) { return { uld: s.uld, location: s.location, cartons: s.remaining }; })
+        };
+      });
+    var nextDay = null;
+    days.some(function (d) {
+      if (d.day > newestUsed && available(d) > 0) { nextDay = { day: d.day, cartons: available(d) }; return true; }
+      return false;
+    });
+
+    var used = [], comments = {};
+    pallets.forEach(function (p) {
+      p.lines.forEach(function (l) {
+        if (used.indexOf(l.uld) === -1) used.push(l.uld);
+        if (isSmcLocation(l.location)) comments[l.uld] = 'BLAST';
+      });
+    });
+    var allocated = pallets.reduce(function (s, p) { return s + p.cartons; }, 0);
+
+    return {
+      mode: 'hellofresh',
+      metric: 'quantity',
+      palletSize: palletSize,
+      pallets: pallets,
+      uldNumbers: used,
+      uldComments: comments,
+      requiredQuantity: required,
+      totalAllocatedQuantity: allocated,
+      totalAllocatedCartons: allocated,
+      cartonsForOrderEntry: allocated,
+      shortfall: Math.max(0, required - allocated),
+      exceptionUsed: exceptionUsed,
+      leftovers: leftovers,
+      nextDay: nextDay,
+      dateSource: detail ? 'detailed' : 'oldest-carton',
+      detailMismatches: detailMismatches,
+      touchedLocations: dedupeStrings(pallets.reduce(function (a, p) {
+        return a.concat(p.lines.map(function (l) { return l.location; }));
+      }, [])),
+      diagnostics: base.diagnostics
+    };
   }
 
   /**
@@ -534,6 +837,8 @@
   var API = {
     DEFAULT_CONFIG: DEFAULT_CONFIG,
     recommendAllocation: recommendAllocation,
+    recommendHelloFresh: recommendHelloFresh,
+    buildCartonDateIndex: buildCartonDateIndex,
     toUldCsv: toUldCsv,
     mergeConfig: mergeConfig
   };

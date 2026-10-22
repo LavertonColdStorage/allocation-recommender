@@ -22,6 +22,10 @@ an order (tenant, item, warehouse, quantity) and recommends which ULDs
 - Damaged, Quarantined, and Mixed-type pallets are excluded — and if an
   excluded pallet would otherwise have been a valid pick, it's flagged so
   someone can check it before allocating
+- **HelloFresh orders:** tick "HelloFresh order" to rebuild stock into pallets
+  of exactly 40 cartons, one item and one production day each, oldest first,
+  with a printable pallet build sheet. Optionally load the Stock On Hand -
+  Detailed export so pallets holding two production days are split correctly.
 - Produces the `ULD Number` CSV dotWMS's bulk allocation upload expects
 
 No API, no login, no data leaves your browser — you export a Stock On Hand

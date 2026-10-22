@@ -114,6 +114,33 @@
   .dlg-body .field { margin-bottom: 12px; }
   .dlg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
   .test-result { font-size: 13px; margin-top: 10px; white-space: pre-wrap; font-family: var(--mono); }
+
+  /* HelloFresh */
+  .hfToggle { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 8px; }
+  .hfToggle input { width: 18px; height: 18px; margin-top: 2px; }
+  .hfToggle label { font-weight: 600; }
+  .hfToggle .sub { display: block; font-weight: 400; }
+  .hfOn .hfToggle { border-color: #2f9e44; background: rgba(47,158,68,.08); }
+  #hfDetailPanel { margin-top: 12px; }
+  .hfBadge { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px;
+    background: #2f9e44; color: #fff; margin-left: 6px; vertical-align: middle; }
+  .sheet { border-collapse: collapse; width: 100%; margin: 6px 0 14px; font-size: 13.5px; }
+  .sheet th, .sheet td { border: 1px solid var(--line); padding: 5px 8px; text-align: left; vertical-align: top; }
+  .sheet th { background: var(--bg); font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-soft); }
+  .sheet td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .sheet tr.exception td { background: var(--serious-bg); }
+  .sheet tr.short td { background: var(--critical-bg); }
+  .sheetLine { display: block; }
+  .sheetNote { font-size: 12.5px; color: var(--ink-soft); margin: 0 0 10px; }
+  .sheetItem { margin: 14px 0 4px; font-size: 14.5px; }
+  @media print {
+    body * { visibility: hidden; }
+    #hfSheetPanel, #hfSheetPanel * { visibility: visible; }
+    #hfSheetPanel { position: absolute; left: 0; top: 0; width: 100%; border: none; }
+    #hfSheetPanel .noPrint { display: none; }
+    .sheet th, .sheet td { border-color: #999; }
+  }
 </style>
 </head>
 <body>
@@ -172,6 +199,27 @@
       <div class="field"><label for="orderOldestDate">Default oldest allowable production date</label><input type="text" id="orderOldestDate" placeholder="YYYY-MM-DD, optional"></div>
       <div class="field"><label for="orderEstablishment">Default establishment(s)</label><input type="text" id="orderEstablishment" placeholder="comma-separated, optional"></div>
     </div>
+    <div class="hfToggle">
+      <input type="checkbox" id="hfCheck">
+      <label for="hfCheck">HelloFresh order (40-carton pallets)
+        <span class="sub">Rebuilds stock into pallets of exactly 40 cartons, one item and one production day each, oldest first.
+        Stored pallets may be broken down, and pallets in locations shared with other items are used (HelloFresh stock is double-deep only). At most one pallet per item may mix two days, and only to complete the order.</span>
+      </label>
+    </div>
+    <div id="hfDetailPanel" hidden>
+      <p class="hint" style="margin-bottom:8px">
+        Optional: the <strong>Stock On Hand – Detailed</strong> export (one row per carton). The ULD export only gives each
+        pallet its oldest carton's date; with the Detailed file loaded, a pallet holding two production days is split correctly.
+        Without it, each pallet is treated as all its oldest-carton date.
+      </p>
+      <div class="grid">
+        <div class="field"><label for="detailFileInput">Stock On Hand – Detailed CSV (optional)</label><input type="file" id="detailFileInput" accept=".csv,text/csv"></div>
+      </div>
+      <div class="actions" style="margin-top:8px">
+        <button id="loadDetailBtn">Load Detailed file</button>
+        <span class="sub" id="detailLoadStatus">Not loaded - using oldest-carton dates.</span>
+      </div>
+    </div>
   </div>
 
   <div class="panel">
@@ -194,6 +242,14 @@
     </div>
 
     <div class="stat-row" id="orderStats" hidden></div>
+  </div>
+
+  <div class="panel" id="hfSheetPanel" hidden>
+    <div class="actions noPrint" style="margin-top:0; float:right">
+      <button id="printSheetBtn">Print build sheet</button>
+    </div>
+    <h2>HelloFresh pallet build sheet</h2>
+    <div id="hfSheetBody"></div>
   </div>
 </main>
 
@@ -247,7 +303,8 @@
     try { window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {}
   }
 
-  var state = { stockRows: [] };
+  // cartonDates: from the optional Detailed export, HelloFresh orders only.
+  var state = { stockRows: [], cartonDates: null };
   var lines = [];       // { id, itemCode, metric, qty, result }
   var nextLineId = 1;
 
@@ -355,6 +412,98 @@
   }
 
   $('loadFilesBtn').addEventListener('click', loadFromFiles);
+
+  // -------------------------------------------------------------------------
+  // HelloFresh mode
+  // -------------------------------------------------------------------------
+  function isHelloFresh() { return $('hfCheck').checked; }
+
+  $('hfCheck').addEventListener('change', function () {
+    var on = isHelloFresh();
+    $('hfDetailPanel').hidden = !on;
+    document.body.classList.toggle('hfOn', on);
+    // HelloFresh pallets are counted in cartons only.
+    if (on) lines.forEach(function (l) { l.metric = 'quantity'; });
+    lines.forEach(function (l) { l.result = null; });
+    renderLines();
+    renderHfSheet();
+  });
+
+  $('loadDetailBtn').addEventListener('click', function () {
+    var f = $('detailFileInput').files[0];
+    if (!f) { $('detailLoadStatus').textContent = 'Choose the Detailed CSV first.'; return; }
+    $('detailLoadStatus').textContent = 'Reading ' + f.name + '…';
+    readFileAsText(f).then(function (text) {
+      var idx = AR.buildCartonDateIndex(text, SC);
+      if (!idx.found || !idx.cartons) {
+        state.cartonDates = null;
+        $('detailLoadStatus').textContent = 'Could not find ULD and carton date columns in ' + f.name +
+          ' - still using oldest-carton dates.';
+        return;
+      }
+      state.cartonDates = idx;
+      $('detailLoadStatus').textContent = 'Loaded ' + idx.cartons + ' cartons on ' + idx.ulds + ' pallets (' + f.name + ').';
+      lines.forEach(function (l) { l.result = null; renderLineResult(l); });
+      renderHfSheet();
+    }).catch(function (err) { $('detailLoadStatus').textContent = 'Failed: ' + err.message; });
+  });
+
+  function fmtDay(key) {
+    if (!key || key === 'no date') return 'no date';
+    var p = key.split('-');
+    var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return Number(p[2]) + ' ' + months[Number(p[1]) - 1] + ' ' + p[0];
+  }
+
+  function escapeHtml(s) {
+    return String(s === undefined || s === null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  function itemLabel(code) {
+    var items = itemOptionsForTenant($('tenantSelect').value);
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].itemCode === code) return items[i].itemName ? code + ' - ' + items[i].itemName : code;
+    }
+    return code;
+  }
+
+  function renderHfSheet() {
+    var panel = $('hfSheetPanel');
+    var hfLines = lines.filter(function (l) { return l.result && l.result.mode === 'hellofresh'; });
+    if (!isHelloFresh() || !hfLines.length) { panel.hidden = true; return; }
+    panel.hidden = false;
+    var totalPallets = hfLines.reduce(function (s, l) { return s + l.result.pallets.length; }, 0);
+    var html = '<p class="sheetNote">Tenant ' + escapeHtml($('tenantSelect').value) + ' · ' +
+      escapeHtml($('warehouseSelect').value) + ' · ' + totalPallets + ' HelloFresh pallet(s) · built ' +
+      new Date().toLocaleString() + '<br>Production dates from ' +
+      (state.cartonDates ? 'the Detailed export (carton level)' : 'each pallet\'s oldest carton (Detailed export not loaded)') +
+      '. Each HelloFresh pallet: one item, one production day, 40 cartons - unless marked.</p>';
+    var n = 0;
+    hfLines.forEach(function (l) {
+      var r = l.result;
+      html += '<h3 class="sheetItem">' + escapeHtml(itemLabel(l.itemCode)) + ' - ' + r.totalAllocatedCartons +
+        ' of ' + r.requiredQuantity + ' cartons' + (r.shortfall ? ' (SHORT ' + r.shortfall + ')' : '') + '</h3>';
+      html += '<table class="sheet"><thead><tr><th>HF pallet</th><th>Production day</th><th class="num">Cartons</th>' +
+        '<th>Take from</th><th>Note</th></tr></thead><tbody>';
+      r.pallets.forEach(function (p) {
+        n++;
+        var take = p.lines.map(function (ln) {
+          return '<span class="sheetLine">' + ln.take + ' ctn from ULD ' + escapeHtml(ln.uld) + ' at ' +
+            escapeHtml(ln.location || '-') + (ln.wholePallet ? ' (whole pallet)' : ' (of ' + ln.uldCartons + ')') +
+            (p.days.length > 1 ? ' - ' + fmtDay(ln.day) : '') + '</span>';
+        }).join('');
+        html += '<tr class="' + (p.kind === 'full' ? '' : p.kind) + '"><td>' + n + '</td><td>' +
+          p.days.map(fmtDay).join(' + ') + '</td><td class="num">' + p.cartons + '</td><td>' + take + '</td><td>' +
+          (p.kind === 'exception' ? 'EXCEPTION - ' : p.kind === 'short' ? 'SHORT - ' : '') + escapeHtml(p.reason) + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    });
+    $('hfSheetBody').innerHTML = html;
+  }
+
+  $('printSheetBtn').addEventListener('click', function () { window.print(); });
 
   function showNoDataYet() {
     state.stockRows = [];
@@ -527,6 +676,7 @@
       weightBtn.addEventListener('click', function () { line.metric = 'weight'; syncMetricButtons(); line.result = null; renderLineResult(line); });
       syncMetricButtons();
       toggle.appendChild(cartonsBtn); toggle.appendChild(weightBtn);
+      if (isHelloFresh()) toggle.hidden = true;  // HelloFresh is cartons only
       qtyTd.appendChild(toggle);
       tr.appendChild(qtyTd);
 
@@ -576,8 +726,49 @@
       explicit: explicit
     };
 
-    line.result = AR.recommendAllocation(state.stockRows, request);
+    if (isHelloFresh()) {
+      request.metric = 'quantity';
+      request.cartonDates = state.cartonDates;
+      line.result = AR.recommendHelloFresh(state.stockRows, request);
+    } else {
+      line.result = AR.recommendAllocation(state.stockRows, request);
+    }
     renderLineResult(line);
+  }
+
+  /** The HelloFresh part of a line's result: pallets built, exceptions, leftovers. */
+  function hfSummaryHtml(r) {
+    var counts = { full: 0, exception: 0, short: 0 };
+    r.pallets.forEach(function (p) { counts[p.kind]++; });
+    var html = '<div class="detail"><span class="hfBadge">HelloFresh</span> <strong>' + r.pallets.length +
+      ' pallet(s) of up to ' + r.palletSize + '</strong>: ' + counts.full + ' full' +
+      (counts.exception ? ', 1 two-day exception' : '') + (counts.short ? ', ' + counts.short + ' short' : '') + '</div>';
+    r.pallets.forEach(function (p) {
+      if (p.kind !== 'full') html += '<div class="flagWarning">' + (p.kind === 'exception' ? 'Exception' : 'Short') +
+        ' pallet: ' + p.cartons + ' ctn, ' + p.days.map(fmtDay).join(' + ') + ' - ' + escapeHtml(p.reason) + '</div>';
+    });
+    if (r.leftovers.length) {
+      html += '<details class="flagWarning" open><summary>' + r.leftovers.length +
+        ' older production day(s) left with cartons that can\'t make a full ' + r.palletSize + '</summary><ul>' +
+        r.leftovers.map(function (lo) {
+          return '<li>' + fmtDay(lo.day) + ': ' + lo.cartons + ' ctn on ' +
+            lo.ulds.map(function (u) { return escapeHtml(u.uld) + ' (' + u.cartons + ')'; }).join(', ') + '</li>';
+        }).join('') + '</ul></details>';
+    }
+    if (r.nextDay) html += '<div class="nextEligible">Next production day not needed: ' + fmtDay(r.nextDay.day) +
+      ' (' + r.nextDay.cartons + ' ctn)</div>';
+    if (r.dateSource !== 'detailed') {
+      html += '<div class="nextEligible">Dates are each pallet\'s oldest carton. Load the Detailed export if any pallet may hold two production days.</div>';
+    }
+    if (r.detailMismatches.length) {
+      html += '<details class="flagWarning"><summary>' + r.detailMismatches.length +
+        ' pallet(s) where the Detailed and ULD exports disagree on carton count</summary><ul>' +
+        r.detailMismatches.map(function (m) {
+          return '<li>' + escapeHtml(m.uld) + ' at ' + escapeHtml(m.location || '-') + ': ULD export ' + m.uldReport +
+            ', Detailed ' + m.detailed + ' - were they exported at different times?</li>';
+        }).join('') + '</ul></details>';
+    }
+    return html;
   }
 
   function renderLineResult(line) {
@@ -599,13 +790,14 @@
       ' ctn) from ' + r.touchedLocations.length + ' location(s)' +
       (r.mode === 'explicit' ? ' · specific requirement' : '') + '</div>' +
       '<div class="detail">' + r.totalAllocatedQuantity + ' / ' + r.requiredQuantity + ' ' + unit + ' covered</div>';
+    if (r.mode === 'hellofresh') html += hfSummaryHtml(r);
     var uldList = r.uldNumbers.map(function (u) {
       return (r.uldComments && r.uldComments[u]) ? (u + ' (' + r.uldComments[u] + ')') : u;
     }).join(', ');
     html += '<details class="lineDiag"><summary>' + r.uldNumbers.length + ' ULD(s)</summary>' +
       '<div class="ulds">' + (uldList || '-') + '</div></details>';
 
-    var next = r.diagnostics && r.diagnostics.nextEligible;
+    var next = r.mode !== 'hellofresh' && r.diagnostics && r.diagnostics.nextEligible;
     if (next) {
       html += '<div class="nextEligible">Next oldest not needed: ' + next.uld + ' at ' + (next.location || '-') +
         ', produced ' + fmtDate(next.productionDate) +
@@ -623,6 +815,18 @@
         }).join('') + '</ul></details>';
     }
 
+    var mixedLoc = (r.diagnostics && r.diagnostics.mixedLocationPallets) || [];
+    if (mixedLoc.length) {
+      html += '<details class="flagWarning" open><summary>' + mixedLoc.length +
+        ' pallet(s) not offered because another SKU shares the location</summary><ul>' +
+        mixedLoc.map(function (f) {
+          return '<li>' + f.uld + ' at ' + (f.location || '-') +
+            ', produced ' + fmtDate(f.productionDate) +
+            ' - shares the slot with ' + (f.otherItems.length ? f.otherItems.join(', ') : 'another item') +
+            '</li>';
+        }).join('') + '</ul></details>';
+    }
+
     var excludedByDate = (r.diagnostics && r.diagnostics.excludedByDate) || [];
     if (excludedByDate.length) {
       html += '<details class="dateExcluded" open><summary>' + excludedByDate.length +
@@ -636,6 +840,7 @@
     cell.innerHTML = html;
     $('downloadAllBtn').disabled = !lines.some(function (l) { return l.result && l.result.uldNumbers.length; });
     renderOrderStats();
+    renderHfSheet();
   }
 
   function renderOrderStats() {
