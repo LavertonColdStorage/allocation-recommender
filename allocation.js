@@ -818,6 +818,172 @@
     };
   }
 
+  // ===========================================================================
+  // HELLOFRESH ORDER LINES FOR .wms (2026-10-23)
+  //
+  // Instead of one .wms order line per item ("13084 x 640") with the date
+  // rules left in free text, each line names exactly what to pick: Item,
+  // Preferred Pick ULD, Best Before Date, Quantity. Matt: those are the only
+  // line filters .wms honours reliably. EST, min/max production dates and a
+  // per-line Allocation are NOT used - when they differ between lines for the
+  // same item, .wms reverts to the first line's value. Any Allocation must be
+  // the same on every line of the order.
+  //
+  // .wms holds the best-before date on these cartons (production date shows
+  // N/A); the stock exports give the production day. HelloFresh product's
+  // best-before is production + 2 years (checked against job 2645PH792930).
+  // config.bestBeforeYears changes that if a code ever differs.
+  // ===========================================================================
+
+  function addYears(key, years) {
+    if (!/^\d{4}-\d\d-\d\d$/.test(key || '')) return '';
+    var y = Number(key.slice(0, 4)) + years, md = key.slice(5);
+    if (md === '02-29') md = '02-28';
+    return y + '-' + md;
+  }
+
+  /**
+   * One order line per item + stored pallet + production day, in the order
+   * the HelloFresh pallets are built. A stored pallet feeding two HF pallets
+   * of the same day is one line with the summed quantity.
+   */
+  function helloFreshOrderLines(itemCode, result, config) {
+    var years = (config && config.bestBeforeYears) || 2;
+    var byKey = {}, out = [];
+    (result && result.pallets || []).forEach(function (p) {
+      p.lines.forEach(function (l) {
+        var key = l.uld + '|' + l.day;
+        if (!byKey[key]) {
+          byKey[key] = {
+            itemCode: itemCode, preferredUld: l.uld, location: l.location,
+            productionDay: l.day, bestBefore: addYears(l.day, years),
+            quantity: 0, pallets: [], wholePallet: l.wholePallet
+          };
+          out.push(byKey[key]);
+        }
+        var line = byKey[key];
+        line.quantity += l.take;
+        if (line.pallets.indexOf(p.number) === -1) line.pallets.push(p.number);
+        line.wholePallet = line.quantity === l.uldCartons;
+      });
+    });
+    return out;
+  }
+
+  function csvCell(v) {
+    var s = v === undefined || v === null ? '' : String(v);
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  /** Order lines as CSV, for keying into Create Manual Shipment Order. */
+  function orderLinesToCsv(lines) {
+    var out = ['Item Code,Preferred Pick ULD,Best Before Date,Quantity,Location,Production Date,HF Pallet(s)'];
+    lines.forEach(function (l) {
+      out.push([l.itemCode, l.preferredUld, l.bestBefore, l.quantity, l.location, l.productionDay,
+        l.pallets.join(' ')].map(csvCell).join(','));
+    });
+    return out.join('\r\n') + '\r\n';
+  }
+
+  // ===========================================================================
+  // PRE-DISPATCH CHECK: a .wms "Shipping - Job Management - Logistic Units"
+  // export (one row per outbound pallet - "<SSCC> Cartons: 40 Weight: ..." -
+  // followed by one row per carton on it). Checks every pallet against the
+  // HelloFresh rules. `rows` is an array of arrays (CSV or Excel, same shape).
+  // ===========================================================================
+
+  function dateCellKey(v) {
+    if (v instanceof Date && !isNaN(v.getTime())) return dayKey(v);
+    var s = String(v === undefined || v === null ? '' : v).trim();
+    var m = s.match(/^(\d{4})-(\d\d)-(\d\d)/);
+    if (m) return m[1] + '-' + m[2] + '-' + m[3];
+    m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (m) return m[3] + '-' + (m[2].length < 2 ? '0' : '') + m[2] + '-' + (m[1].length < 2 ? '0' : '') + m[1];
+    return '';
+  }
+
+  function checkHelloFreshShipment(rows, config) {
+    var palletSize = (config && config.palletSize) || 40;
+    var plan = config && config.plan;   // optional { item: { bestBefore: cartons } }
+    var head = -1, cols = {};
+    for (var i = 0; i < rows.length && head === -1; i++) {
+      var h = (rows[i] || []).map(function (c) { return String(c === undefined || c === null ? '' : c).toLowerCase(); });
+      if (h[0] && h[0].indexOf('unit number') !== -1) {
+        head = i;
+        h.forEach(function (name, k) {
+          if (name.indexOf('best before') !== -1) cols.bb = k;
+          else if (name.indexOf('production') !== -1) cols.prod = k;
+          else if (name.indexOf('packaging') !== -1) cols.pack = k;
+          else if (name.indexOf('item name') !== -1) cols.name = k;
+        });
+      }
+    }
+    if (head === -1) return { found: false, units: [], items: {}, problems: ['Could not find the "Unit Number / Item Code" header row - is this the Logistic Units export?'], ok: false };
+
+    var units = [], cur = null, names = {};
+    for (var r = head + 1; r < rows.length; r++) {
+      var row = rows[r] || [];
+      var first = String(row[0] === undefined || row[0] === null ? '' : row[0]).trim();
+      if (!first) continue;
+      var m = first.match(/^(\S+)\s+Cartons:\s*(\d+)/i);
+      if (m) {
+        cur = { unit: m[1], declared: Number(m[2]), cartons: 0, items: {}, days: {} };
+        units.push(cur);
+        continue;
+      }
+      if (!cur) continue;
+      var item = first.replace(/^'/, '');
+      var day = dateCellKey(row[cols.bb]) || dateCellKey(row[cols.prod]) || dateCellKey(row[cols.pack]) || 'no date';
+      cur.cartons++;
+      cur.items[item] = (cur.items[item] || 0) + 1;
+      cur.days[day] = (cur.days[day] || 0) + 1;
+      if (cols.name !== undefined && row[cols.name]) names[item] = String(row[cols.name]);
+    }
+
+    var items = {}, problems = [];
+    units.forEach(function (u) {
+      var codes = Object.keys(u.items), days = Object.keys(u.days).sort();
+      u.itemCodes = codes; u.dayList = days;
+      u.issues = [];
+      if (codes.length > 1) u.issues.push('MIXED ITEMS (' + codes.join(', ') + ')');
+      if (days.length > 2) u.issues.push('MORE THAN TWO DATES');
+      if (u.cartons !== u.declared) u.issues.push('label says ' + u.declared + ', ' + u.cartons + ' cartons listed');
+      u.kind = days.length > 1 ? 'exception' : (u.cartons < palletSize ? 'short' : (u.cartons > palletSize ? 'over' : 'full'));
+      if (u.kind === 'over') u.issues.push('MORE THAN ' + palletSize + ' CARTONS');
+      codes.forEach(function (c) {
+        var it = items[c] || (items[c] = { itemCode: c, itemName: names[c] || '', units: 0, cartons: 0, days: {}, exceptions: 0, shorts: 0, issues: [] });
+        it.units++; it.cartons += u.items[c];
+        days.forEach(function (d) { it.days[d] = (it.days[d] || 0) + u.days[d]; });
+        if (u.kind === 'exception') it.exceptions++;
+        if (u.kind === 'short') it.shorts++;
+      });
+    });
+    Object.keys(items).forEach(function (c) {
+      var it = items[c];
+      if (it.exceptions > 1) it.issues.push(it.exceptions + ' two-date pallets - only one allowed per item');
+      if (it.shorts > 1) it.issues.push(it.shorts + ' short pallets - normally at most one per item');
+      if (plan && plan[c]) {
+        var planned = plan[c], all = {};
+        Object.keys(planned).concat(Object.keys(it.days)).forEach(function (d) { all[d] = true; });
+        Object.keys(all).sort().forEach(function (d) {
+          var bb = d, want = planned[bb] || 0, got = it.days[bb] || 0;
+          if (want !== got) it.issues.push('best before ' + bb + ': planned ' + want + ', shipped ' + got);
+        });
+      }
+    });
+    if (plan) {
+      Object.keys(items).forEach(function (c) {
+        if (!plan[c]) items[c].issues.push('shipped but not on the planned order lines');
+      });
+      Object.keys(plan).forEach(function (c) {
+        if (!items[c]) problems.push(c + ': on the planned order lines but nothing shipped');
+      });
+    }
+    units.forEach(function (u) { u.issues.forEach(function (x) { problems.push('Pallet ' + u.unit + ': ' + x); }); });
+    Object.keys(items).forEach(function (c) { items[c].issues.forEach(function (x) { problems.push(c + ': ' + x); }); });
+    return { found: true, palletSize: palletSize, units: units, items: items, problems: problems, ok: problems.length === 0 };
+  }
+
   /**
    * dotWMS bulk allocation upload format: a single "ULD Number" column,
    * plus an optional "Comment" column carrying "BLAST" for ULDs sourced
@@ -839,6 +1005,9 @@
     recommendAllocation: recommendAllocation,
     recommendHelloFresh: recommendHelloFresh,
     buildCartonDateIndex: buildCartonDateIndex,
+    helloFreshOrderLines: helloFreshOrderLines,
+    orderLinesToCsv: orderLinesToCsv,
+    checkHelloFreshShipment: checkHelloFreshShipment,
     toUldCsv: toUldCsv,
     mergeConfig: mergeConfig
   };

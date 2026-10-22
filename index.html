@@ -244,12 +244,40 @@
     <div class="stat-row" id="orderStats" hidden></div>
   </div>
 
+  <div class="panel" id="hfLinesPanel" hidden>
+    <div class="actions" style="margin-top:0; float:right">
+      <button id="downloadLinesBtn">Download order lines CSV</button>
+    </div>
+    <h2>HelloFresh order lines for .wms</h2>
+    <p class="hint">Key these into <strong>Shipping → Create Manual Shipment Order</strong>, one line each, using only
+      <strong>Item Code, Preferred Pick ULD, Best Before Date and Quantity</strong>. Leave EST and the min/max date
+      filters blank, and if you use Allocation, put the <em>same</em> value on every line - .wms falls back to the first
+      line's value when they differ.</p>
+    <div id="hfLinesBody"></div>
+  </div>
+
   <div class="panel" id="hfSheetPanel" hidden>
     <div class="actions noPrint" style="margin-top:0; float:right">
       <button id="printSheetBtn">Print build sheet</button>
     </div>
     <h2>HelloFresh pallet build sheet</h2>
     <div id="hfSheetBody"></div>
+  </div>
+
+  <div class="panel" id="hfCheckPanel" hidden>
+    <h2>Pre-dispatch check (HelloFresh)</h2>
+    <p class="hint">Before the truck goes: in .wms open the job, export its <strong>Logistic Units</strong> table
+      (Excel or CSV) and load it here. Every pallet is checked - 40 cartons, one item, one best-before date, at most one
+      two-date pallet per item - and, if this page has a build plan, compared with the order lines above.</p>
+    <div class="grid">
+      <div class="field"><label for="luFileInput">Logistic Units export (.xlsx or .csv)</label><input type="file" id="luFileInput" accept=".xlsx,.xls,.csv,text/csv"></div>
+    </div>
+    <div class="actions" style="margin-top:8px">
+      <button id="checkShipmentBtn" class="primary">Check shipment</button>
+      <label class="sub"><input type="checkbox" id="comparePlanCheck" checked> compare with the order lines on this page</label>
+      <span class="sub" id="luStatus"></span>
+    </div>
+    <div id="luResult"></div>
   </div>
 </main>
 
@@ -275,6 +303,8 @@
 
 <script src="checks.js"></script>
 <script src="allocation.js"></script>
+<!-- Reads the .xlsx Logistic Units export for the HelloFresh pre-dispatch check. Optional: CSV works without it. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
 <script>
 (function () {
   'use strict';
@@ -472,7 +502,13 @@
   function renderHfSheet() {
     var panel = $('hfSheetPanel');
     var hfLines = lines.filter(function (l) { return l.result && l.result.mode === 'hellofresh'; });
-    if (!isHelloFresh() || !hfLines.length) { panel.hidden = true; return; }
+    $('hfCheckPanel').hidden = !isHelloFresh();
+    if (!isHelloFresh() || !hfLines.length) {
+      panel.hidden = true;
+      $('hfLinesPanel').hidden = true;
+      state.orderLines = [];
+      return;
+    }
     panel.hidden = false;
     var totalPallets = hfLines.reduce(function (s, l) { return s + l.result.pallets.length; }, 0);
     var html = '<p class="sheetNote">Tenant ' + escapeHtml($('tenantSelect').value) + ' · ' +
@@ -501,7 +537,115 @@
       html += '</tbody></table>';
     });
     $('hfSheetBody').innerHTML = html;
+    renderOrderLines(hfLines);
   }
+
+  // ---- Order lines for .wms ------------------------------------------------
+  // HF pallet numbers run across the whole order on the build sheet, so the
+  // per-item numbers from the engine are offset to match it.
+  function currentOrderLines(hfLines) {
+    var offset = 0, all = [];
+    hfLines.forEach(function (l) {
+      AR.helloFreshOrderLines(l.itemCode, l.result).forEach(function (ol) {
+        ol.pallets = ol.pallets.map(function (p) { return p + offset; });
+        all.push(ol);
+      });
+      offset += l.result.pallets.length;
+    });
+    return all;
+  }
+
+  function renderOrderLines(hfLines) {
+    var all = currentOrderLines(hfLines);
+    state.orderLines = all;
+    $('hfLinesPanel').hidden = !all.length;
+    if (!all.length) return;
+    var html = '<table class="sheet"><thead><tr><th>#</th><th>Item Code</th><th>Preferred Pick ULD</th>' +
+      '<th>Best Before Date</th><th class="num">Quantity</th><th>Location</th><th>For HF pallet(s)</th></tr></thead><tbody>';
+    all.forEach(function (ol, i) {
+      html += '<tr><td>' + (i + 1) + '</td><td>' + escapeHtml(ol.itemCode) + '</td><td>' + escapeHtml(ol.preferredUld) +
+        (ol.wholePallet ? ' <span class="sub">(whole)</span>' : '') + '</td><td>' + escapeHtml(ol.bestBefore) +
+        '</td><td class="num">' + ol.quantity + '</td><td>' + escapeHtml(ol.location || '-') + '</td><td>' +
+        ol.pallets.join(', ') + '</td></tr>';
+    });
+    var total = all.reduce(function (s, ol) { return s + ol.quantity; }, 0);
+    html += '</tbody></table><p class="sheetNote">' + all.length + ' order line(s), ' + total +
+      ' cartons. Best Before Date = production day + 2 years.</p>';
+    $('hfLinesBody').innerHTML = html;
+  }
+
+  $('downloadLinesBtn').addEventListener('click', function () {
+    if (!state.orderLines || !state.orderLines.length) return;
+    var blob = new Blob([AR.orderLinesToCsv(state.orderLines)], { type: 'text/csv' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'HelloFresh-order-lines.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  });
+
+  // ---- Pre-dispatch check ----------------------------------------------------
+  function readRows(file) {
+    if (/\.xlsx?$/i.test(file.name)) {
+      if (!window.XLSX) return Promise.reject(new Error('the Excel reader did not load - save the export as CSV and try again'));
+      return new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function () {
+          try {
+            var wb = XLSX.read(reader.result, { type: 'array', cellDates: true });
+            resolve(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' }));
+          } catch (e) { reject(e); }
+        };
+        reader.onerror = function () { reject(reader.error); };
+        reader.readAsArrayBuffer(file);
+      });
+    }
+    return readFileAsText(file).then(function (text) {
+      var rows = [];
+      SC.forEachCsvRecord(text, null, function (values) { rows.push(values); });
+      return rows;
+    });
+  }
+
+  function planFromOrderLines() {
+    var plan = {};
+    (state.orderLines || []).forEach(function (ol) {
+      var p = plan[ol.itemCode] || (plan[ol.itemCode] = {});
+      p[ol.bestBefore] = (p[ol.bestBefore] || 0) + ol.quantity;
+    });
+    return Object.keys(plan).length ? plan : null;
+  }
+
+  $('checkShipmentBtn').addEventListener('click', function () {
+    var f = $('luFileInput').files[0];
+    if (!f) { $('luStatus').textContent = 'Choose the Logistic Units export first.'; return; }
+    $('luStatus').textContent = 'Reading ' + f.name + '…';
+    readRows(f).then(function (rows) {
+      var plan = $('comparePlanCheck').checked ? planFromOrderLines() : null;
+      var r = AR.checkHelloFreshShipment(rows, { plan: plan });
+      $('luStatus').textContent = 'Checked ' + f.name + ' at ' + new Date().toLocaleTimeString() + '.';
+      if (!r.found) { $('luResult').innerHTML = '<div class="flagWarning">' + escapeHtml(r.problems[0]) + '</div>'; return; }
+      var html = '<div class="lineResult" style="margin:10px 0"><span class="status ' + (r.ok ? 'full' : 'short') + '">' +
+        (r.ok ? 'PASS' : 'CHECK ' + r.problems.length + ' issue(s)') + '</span> ' + r.units.length + ' pallet(s), ' +
+        r.units.reduce(function (s, u) { return s + u.cartons; }, 0) + ' cartons' +
+        (plan ? ' · compared with this page\'s order lines' : '') + '</div>';
+      if (r.problems.length) {
+        html += '<details class="flagWarning" open><summary>Issues</summary><ul>' +
+          r.problems.map(function (p) { return '<li>' + escapeHtml(p) + '</li>'; }).join('') + '</ul></details>';
+      }
+      html += '<table class="sheet"><thead><tr><th>Item</th><th class="num">Pallets</th><th class="num">Cartons</th>' +
+        '<th>Best-before dates (cartons)</th><th class="num">Two-date</th><th class="num">Short</th></tr></thead><tbody>';
+      Object.keys(r.items).sort().forEach(function (c) {
+        var it = r.items[c];
+        html += '<tr class="' + (it.issues.length ? 'short' : '') + '"><td>' + escapeHtml(c) +
+          (it.itemName ? ' - ' + escapeHtml(it.itemName) : '') + '</td><td class="num">' + it.units + '</td><td class="num">' +
+          it.cartons + '</td><td>' + Object.keys(it.days).sort().map(function (d) { return d + ' (' + it.days[d] + ')'; }).join(', ') +
+          '</td><td class="num">' + it.exceptions + '</td><td class="num">' + it.shorts + '</td></tr>';
+      });
+      html += '</tbody></table>';
+      $('luResult').innerHTML = html;
+    }).catch(function (err) { $('luStatus').textContent = 'Failed: ' + err.message; });
+  });
 
   $('printSheetBtn').addEventListener('click', function () { window.print(); });
 
