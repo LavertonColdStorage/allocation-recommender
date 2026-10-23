@@ -122,6 +122,7 @@
   .hfToggle label { font-weight: 600; }
   .hfToggle .sub { display: block; font-weight: 400; }
   .hfOn .hfToggle { border-color: #2f9e44; background: rgba(47,158,68,.08); }
+  .hfLive { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
   #hfDetailPanel { margin-top: 12px; }
   .hfBadge { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px;
     background: #2f9e44; color: #fff; margin-left: 6px; vertical-align: middle; }
@@ -207,8 +208,31 @@
       </label>
     </div>
     <div id="hfDetailPanel" hidden>
-      <p class="hint" style="margin-bottom:8px">
-        Optional: the <strong>Stock On Hand – Detailed</strong> export (one row per carton). The ULD export only gives each
+      <div class="hfLive">
+        <h3 style="margin:4px 0 6px; font-size:14px">Live stock from .wms <span class="sub">(no exports needed)</span></h3>
+        <p class="hint" style="margin-bottom:8px">Reads current stock, carton dates, allocations and holds straight from .wms
+          for the codes below, then fills in the tenant, warehouse and one order line per code. Takes about 20–40 seconds.
+          The file uploads above and below still work if this is unavailable.</p>
+        <div class="grid">
+          <div class="field"><label for="liveTenant">Tenant code</label><input type="text" id="liveTenant" value="HAZEL"></div>
+          <div class="field"><label for="liveWarehouse">Warehouse</label><input type="text" id="liveWarehouse" value="LEAKES"></div>
+          <div class="field" style="grid-column: span 2"><label for="liveItems">HelloFresh item codes</label>
+            <input type="text" id="liveItems" value="13084, 13085, 13086, 13097, 13098, 13099, 13100, 13102, 13103, 13104"></div>
+        </div>
+        <details class="advanced" id="liveSettings">
+          <summary>Connection (set once on this PC)</summary>
+          <div class="grid">
+            <div class="field"><label for="liveUrl">Worker URL</label><input type="url" id="liveUrl" placeholder="https://lcs-wms-query.matthew-rowe1982.workers.dev"></div>
+            <div class="field"><label for="liveToken">Access token</label><input type="password" id="liveToken" placeholder="the PAGE_TOKEN"></div>
+          </div>
+        </details>
+        <div class="actions" style="margin-top:8px">
+          <button id="loadLiveBtn" class="primary">Load live stock</button>
+          <span class="sub" id="liveStatus"></span>
+        </div>
+      </div>
+      <p class="hint" style="margin:14px 0 8px">
+        <strong>Or, from files:</strong> load the ULD export above, and optionally the <strong>Stock On Hand – Detailed</strong> export (one row per carton). The ULD export only gives each
         pallet its oldest carton's date; with the Detailed file loaded, a pallet holding two production days is split correctly.
         Without it, each pallet is treated as all its oldest-carton date.
       </p>
@@ -303,6 +327,7 @@
 
 <script src="checks.js"></script>
 <script src="allocation.js"></script>
+<script src="livestock.js"></script>
 <!-- Reads the .xlsx Logistic Units export for the HelloFresh pre-dispatch check. Optional: CSV works without it. -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
 <script>
@@ -457,6 +482,92 @@
     lines.forEach(function (l) { l.result = null; });
     renderLines();
     renderHfSheet();
+  });
+
+  // ---- Live stock from .wms (via the lcs-wms-query Worker) -----------------
+  var LIVE_KEY = 'lcs.allocation.live';
+  (function restoreLive() {
+    try {
+      var s = JSON.parse(localStorage.getItem(LIVE_KEY) || '{}');
+      $('liveUrl').value = s.url || 'https://lcs-wms-query.matthew-rowe1982.workers.dev';
+      if (s.token) $('liveToken').value = s.token;
+      if (s.tenant) $('liveTenant').value = s.tenant;
+      if (s.items) $('liveItems').value = s.items;
+      if (!s.token) $('liveSettings').open = true;
+    } catch (e) { $('liveUrl').value = 'https://lcs-wms-query.matthew-rowe1982.workers.dev'; }
+  })();
+  function saveLive() {
+    try {
+      localStorage.setItem(LIVE_KEY, JSON.stringify({
+        url: $('liveUrl').value.trim(), token: $('liveToken').value.trim(),
+        tenant: $('liveTenant').value.trim(), items: $('liveItems').value.trim()
+      }));
+    } catch (e) { /* private window etc. - fine, just not remembered */ }
+  }
+
+  /** One Query API table through the Worker, paging 25,000 rows at a time, backing off on 429. */
+  function liveQuery(base, token) {
+    return function (table, where, join) {
+      var rows = [];
+      function page(skip, wait, tries) {
+        var u = base + '/q?Table=' + encodeURIComponent(table) + '&Limit=25000&Skip=' + skip +
+          (join ? '&InnerJoin=' + encodeURIComponent(join) : '') + (where ? '&Where=' + encodeURIComponent(where) : '');
+        return fetch(u, { headers: { Authorization: 'Bearer ' + token } }).then(function (r) {
+          if (r.status === 429 && tries < 4) {
+            return new Promise(function (res) { setTimeout(res, wait); }).then(function () { return page(skip, wait * 2, tries + 1); });
+          }
+          return r.json().catch(function () { return {}; }).then(function (j) {
+            if (!r.ok || (j.Status && j.Status !== 'Success')) {
+              throw new Error(table + ': ' + (j.error || j.Message || ('HTTP ' + r.status)));
+            }
+            var data = j.Data || [];
+            rows = rows.concat(data);
+            return data.length === 25000 ? page(skip + 25000, 2000, 0) : rows;
+          });
+        });
+      }
+      return page(0, 2000, 0);
+    };
+  }
+
+  $('loadLiveBtn').addEventListener('click', function () {
+    var base = $('liveUrl').value.trim().replace(/\/+$/, ''), token = $('liveToken').value.trim();
+    var codes = $('liveItems').value.split(/[\s,;]+/).map(function (s) { return s.trim(); }).filter(Boolean);
+    if (!base || !token) { $('liveSettings').open = true; $('liveStatus').textContent = 'Enter the Worker URL and access token first.'; return; }
+    if (!codes.length) { $('liveStatus').textContent = 'Enter at least one item code.'; return; }
+    saveLive();
+    var btn = $('loadLiveBtn'); btn.disabled = true;
+    LiveStock.loadLiveStock({
+      query: liveQuery(base, token),
+      tenantCode: $('liveTenant').value.trim().toUpperCase(),
+      warehouseCode: $('liveWarehouse').value.trim().toUpperCase(),
+      itemCodes: codes,
+      onProgress: function (t) { $('liveStatus').textContent = t; }
+    }).then(function (out) {
+      state.stockRows = out.stockRows;
+      state.cartonDates = out.cartonDates;
+      var when = out.stats.loadedAt.toLocaleTimeString();
+      setBanner('live', 'Live from .wms at ' + when + ' - ' + out.stats.pallets + ' pallets, ' + out.stats.cartons +
+        ' cartons of ' + codes.length + ' code(s), allocations and holds included.');
+      $('sourceLine').textContent = 'Live .wms ' + when;
+      $('detailLoadStatus').textContent = 'Carton dates come from the live load (' + when + ') - no Detailed file needed.';
+      $('liveStatus').textContent = 'Loaded ' + out.stats.pallets + ' pallets in ' + out.stats.seconds + 's.';
+      populateWarehouses();
+      populateTenants();
+      $('warehouseSelect').value = out.stats.warehouseCode;
+      $('tenantSelect').value = out.stats.tenantName;
+      // One order line per code that isn't already on the order.
+      var have = {};
+      lines.forEach(function (l) { if (l.itemCode) have[l.itemCode] = true; });
+      lines = lines.filter(function (l) { return l.itemCode; });
+      codes.forEach(function (c) {
+        if (!have[c]) lines.push({ id: nextLineId++, itemCode: c, metric: 'quantity', qty: null, result: null });
+      });
+      renderLines();
+      renderHfSheet();
+    }).catch(function (err) {
+      $('liveStatus').textContent = 'Live load failed: ' + err.message + ' - the file uploads still work.';
+    }).then(function () { btn.disabled = false; });
   });
 
   $('loadDetailBtn').addEventListener('click', function () {
