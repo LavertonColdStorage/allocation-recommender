@@ -122,7 +122,6 @@
   .hfToggle label { font-weight: 600; }
   .hfToggle .sub { display: block; font-weight: 400; }
   .hfOn .hfToggle { border-color: #2f9e44; background: rgba(47,158,68,.08); }
-  .hfLive { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
   #hfDetailPanel { margin-top: 12px; }
   .hfBadge { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px;
     background: #2f9e44; color: #fff; margin-left: 6px; vertical-align: middle; }
@@ -155,15 +154,38 @@
 <header>
   <div class="sub" id="sourceLine">Loading…</div>
   <div class="spacer"></div>
-  <button id="refreshBtn">Refresh stock</button>
-  <button id="connectBtn" class="primary">⚙ Connect</button>
 </header>
 
 <main>
   <div id="banner" class="banner empty">No stock data loaded yet - load a CSV below.</div>
 
+  <div class="panel" id="livePanel">
+    <h2>Load live stock from .wms</h2>
+    <p class="hint">Reads current stock straight from .wms for the item codes you list - allocations, holds, locations and
+      carton dates included, no exports needed. Then fills in the tenant, warehouse and one order line per code. Takes about
+      20–60 seconds depending on how many codes. The file upload below still works if this is unavailable.</p>
+    <div class="grid">
+      <div class="field"><label for="liveTenant">Tenant code</label><input type="text" id="liveTenant" value="HAZEL" placeholder="e.g. HAZEL, MID, JBS"></div>
+      <div class="field"><label for="liveWarehouse">Warehouse</label><input type="text" id="liveWarehouse" value="LEAKES"></div>
+      <div class="field" style="grid-column: span 2"><label for="liveItems">Item codes for this order</label>
+        <input type="text" id="liveItems" placeholder="comma-separated, e.g. 13084, 13085"></div>
+    </div>
+    <details class="advanced" id="liveSettings">
+      <summary>Connection (set once on this PC)</summary>
+      <div class="grid">
+        <div class="field"><label for="liveUrl">Worker URL</label><input type="url" id="liveUrl" placeholder="https://lcs-wms-query.matthew-rowe1982.workers.dev"></div>
+        <div class="field"><label for="liveToken">Access token</label><input type="password" id="liveToken" placeholder="the PAGE_TOKEN"></div>
+      </div>
+    </details>
+    <div class="actions">
+      <button id="loadLiveBtn" class="primary">Load live stock</button>
+      <button id="hfCodesBtn" type="button">Use HelloFresh codes</button>
+      <span class="sub" id="liveStatus"></span>
+    </div>
+  </div>
+
   <div class="panel">
-    <h2>Getting the export from dotWMS</h2>
+    <h2>Or: getting the export from dotWMS</h2>
     <p class="hint">
       Run <a href="https://au15.dotwms.com/?module=packing&amp;submodule=reporting_genericreports&amp;key=1341" target="_blank" rel="noopener">Stock On Hand – ULD</a>
       in dotWMS (opens in a new tab - log in first if needed), filtered to the warehouse/tenant you need.
@@ -208,31 +230,9 @@
       </label>
     </div>
     <div id="hfDetailPanel" hidden>
-      <div class="hfLive">
-        <h3 style="margin:4px 0 6px; font-size:14px">Live stock from .wms <span class="sub">(no exports needed)</span></h3>
-        <p class="hint" style="margin-bottom:8px">Reads current stock, carton dates, allocations and holds straight from .wms
-          for the codes below, then fills in the tenant, warehouse and one order line per code. Takes about 20–40 seconds.
-          The file uploads above and below still work if this is unavailable.</p>
-        <div class="grid">
-          <div class="field"><label for="liveTenant">Tenant code</label><input type="text" id="liveTenant" value="HAZEL"></div>
-          <div class="field"><label for="liveWarehouse">Warehouse</label><input type="text" id="liveWarehouse" value="LEAKES"></div>
-          <div class="field" style="grid-column: span 2"><label for="liveItems">HelloFresh item codes</label>
-            <input type="text" id="liveItems" value="13084, 13085, 13086, 13097, 13098, 13099, 13100, 13102, 13103, 13104"></div>
-        </div>
-        <details class="advanced" id="liveSettings">
-          <summary>Connection (set once on this PC)</summary>
-          <div class="grid">
-            <div class="field"><label for="liveUrl">Worker URL</label><input type="url" id="liveUrl" placeholder="https://lcs-wms-query.matthew-rowe1982.workers.dev"></div>
-            <div class="field"><label for="liveToken">Access token</label><input type="password" id="liveToken" placeholder="the PAGE_TOKEN"></div>
-          </div>
-        </details>
-        <div class="actions" style="margin-top:8px">
-          <button id="loadLiveBtn" class="primary">Load live stock</button>
-          <span class="sub" id="liveStatus"></span>
-        </div>
-      </div>
-      <p class="hint" style="margin:14px 0 8px">
-        <strong>Or, from files:</strong> load the ULD export above, and optionally the <strong>Stock On Hand – Detailed</strong> export (one row per carton). The ULD export only gives each
+      <p class="hint" style="margin-bottom:8px">
+        If you loaded <strong>live stock</strong>, carton dates are already included - skip this. If you loaded the ULD export
+        from a file, you can optionally add the <strong>Stock On Hand – Detailed</strong> export (one row per carton). The ULD export only gives each
         pallet its oldest carton's date; with the Detailed file loaded, a pallet holding two production days is split correctly.
         Without it, each pallet is treated as all its oldest-carton date.
       </p>
@@ -305,26 +305,6 @@
   </div>
 </main>
 
-<dialog id="connectDlg">
-  <form method="dialog" class="dlg-body" id="connectForm">
-    <h2>Connect to the Worker</h2>
-    <p>Same Worker the stock-checks dashboard uses - the stock and item master snapshots dotWMS pushes.</p>
-    <div class="field">
-      <label for="urlInput">Worker URL</label>
-      <input type="url" id="urlInput" placeholder="https://dotwms-stock-checks.matthew-rowe1982.workers.dev">
-    </div>
-    <div class="field">
-      <label for="tokenInput">Dashboard token (DASH_TOKEN)</label>
-      <input type="password" id="tokenInput" placeholder="the DASH_TOKEN secret">
-    </div>
-    <div class="test-result" id="testResult"></div>
-    <div class="dlg-actions">
-      <button type="button" id="testBtn">Test</button>
-      <button type="submit" class="primary" id="saveBtn">Save &amp; load</button>
-    </div>
-  </form>
-</dialog>
-
 <script src="checks.js"></script>
 <script src="allocation.js"></script>
 <script src="livestock.js"></script>
@@ -344,88 +324,15 @@
   var SC = StockChecks, AR = AllocationRecommender;
   var $ = function (id) { return document.getElementById(id); };
 
-  // -------------------------------------------------------------------------
-  // Settings — shared with the stock-checks dashboard's Worker connection.
-  // -------------------------------------------------------------------------
-  var SETTINGS_KEY = 'dotwms-stock-checks.settings';
-  var settings = { url: '', token: '' };
-  try {
-    var saved = window.localStorage.getItem(SETTINGS_KEY);
-    if (saved) settings = JSON.parse(saved);
-  } catch (e) { /* private browsing etc. — settings just won't persist */ }
-
-  function saveSettings() {
-    try { window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {}
-  }
-
   // cartonDates: from the optional Detailed export, HelloFresh orders only.
   var state = { stockRows: [], cartonDates: null };
   var lines = [];       // { id, itemCode, metric, qty, result }
   var nextLineId = 1;
 
-  // -------------------------------------------------------------------------
-  // Live fetch — same slice/manifest pattern as leakes-stock-checks.html.
-  // -------------------------------------------------------------------------
-  function fetchSnapshotText(base, q, kind, onProgress) {
-    return fetch(base + '/' + kind + q)
-      .then(function (res) { if (res.status === 404) return null; return res.json(); })
-      .then(function (manifest) {
-        if (!manifest) return null;
-        if (!manifest.ok) throw new Error(manifest.error || 'The Worker refused the request.');
-        var meta = manifest.meta;
-        var count = meta.sliceCount || 0;
-        if (!count) return { meta: meta, text: '' };
-        var buffers = [];
-        var chain = Promise.resolve();
-        for (var i = 0; i < count; i++) {
-          (function (n) {
-            chain = chain.then(function () {
-              if (onProgress) onProgress(kind, n + 1, count, meta);
-              return fetch(base + '/part?kind=' + kind + '&i=' + n + '&token=' + encodeURIComponent(settings.token))
-                .then(function (r) {
-                  if (!r.ok) throw new Error('Slice ' + n + ' came back ' + r.status);
-                  return r.arrayBuffer();
-                })
-                .then(function (buf) { buffers[n] = new Uint8Array(buf); });
-            });
-          })(i);
-        }
-        return chain.then(function () {
-          var total = 0, k;
-          for (k = 0; k < buffers.length; k++) total += buffers[k].length;
-          var joined = new Uint8Array(total), at = 0;
-          for (k = 0; k < buffers.length; k++) { joined.set(buffers[k], at); at += buffers[k].length; }
-          buffers.length = 0;
-          return { meta: meta, text: new TextDecoder('utf-8').decode(joined) };
-        });
-      });
-  }
-
   function setBanner(kind, text) {
     var b = $('banner');
     b.className = 'banner ' + kind;
     b.textContent = text;
-  }
-
-  function loadLive() {
-    var base = settings.url.replace(/\/+$/, '');
-    var q = '?token=' + encodeURIComponent(settings.token);
-    var progress = function (kind, n, count, meta) {
-      setBanner('live', 'Downloading the ' + kind + ' snapshot - slice ' + n + ' of ' + count +
-        ' (' + Math.round((meta.totalBytes || 0) / 1048576) + ' MB)…');
-    };
-    setBanner('live', 'Asking the Worker what it has…');
-    fetchSnapshotText(base, q, 'stock', progress).then(function (stock) {
-      if (!stock) throw new Error('No stock snapshot has been pushed yet.');
-      state.stockRows = SC.parseStockText(stock.text).rows;
-      setBanner('live', 'Live - ' + state.stockRows.length + ' stock rows loaded (' +
-        (stock.meta.pushedAt ? new Date(stock.meta.pushedAt).toLocaleString() : 'unknown time') + ').');
-      $('sourceLine').textContent = 'Connected: ' + base;
-      populateWarehouses();
-      populateTenants();
-    }).catch(function (err) {
-      setBanner('error', 'Could not load live data: ' + err.message);
-    });
   }
 
   function readFileAsText(file) {
@@ -486,6 +393,13 @@
 
   // ---- Live stock from .wms (via the lcs-wms-query Worker) -----------------
   var LIVE_KEY = 'lcs.allocation.live';
+  // Current HelloFresh codes (Hazeldenes) - "subject to change", per Matt 2026-10-22.
+  var HELLOFRESH_CODES = '13084, 13085, 13086, 13097, 13098, 13099, 13100, 13102, 13103, 13104';
+  $('hfCodesBtn').addEventListener('click', function () {
+    $('liveTenant').value = 'HAZEL';
+    $('liveItems').value = HELLOFRESH_CODES;
+    if (!$('hfCheck').checked) { $('hfCheck').checked = true; $('hfCheck').dispatchEvent(new Event('change')); }
+  });
   (function restoreLive() {
     try {
       var s = JSON.parse(localStorage.getItem(LIVE_KEY) || '{}');
@@ -762,7 +676,7 @@
 
   function showNoDataYet() {
     state.stockRows = [];
-    setBanner('empty', 'No stock data loaded yet - load a CSV below, or connect to the Worker.');
+    setBanner('empty', 'No stock data loaded yet - load a CSV below, or load live stock from .wms.');
     $('sourceLine').textContent = 'No data loaded';
     populateWarehouses();
     populateTenants();
@@ -1146,35 +1060,7 @@
   });
 
   // -------------------------------------------------------------------------
-  // Connect dialog
-  // -------------------------------------------------------------------------
-  var dlg = $('connectDlg');
-  $('connectBtn').addEventListener('click', function () {
-    $('urlInput').value = settings.url;
-    $('tokenInput').value = settings.token;
-    $('testResult').textContent = '';
-    dlg.showModal();
-  });
-  $('testBtn').addEventListener('click', function () {
-    var base = $('urlInput').value.trim().replace(/\/+$/, '');
-    if (!base) { $('testResult').textContent = 'Enter a Worker URL first.'; return; }
-    $('testResult').textContent = 'Testing…';
-    fetch(base + '/health').then(function (r) { return r.json(); }).then(function (j) {
-      $('testResult').textContent = 'kvBound: ' + j.kvBound + '\ndash token set: ' + j.dashTokenSet;
-    }).catch(function (e) { $('testResult').textContent = 'Failed: ' + e.message; });
-  });
-  $('connectForm').addEventListener('submit', function () {
-    settings.url = $('urlInput').value.trim();
-    settings.token = $('tokenInput').value.trim();
-    saveSettings();
-    if (settings.url && settings.token) loadLive(); else showNoDataYet();
-  });
-  $('refreshBtn').addEventListener('click', function () {
-    if (settings.url && settings.token) loadLive(); else showNoDataYet();
-  });
-
-  // -------------------------------------------------------------------------
-  if (settings.url && settings.token) loadLive(); else showNoDataYet();
+  showNoDataYet();
   addLine();
 })();
 </script>

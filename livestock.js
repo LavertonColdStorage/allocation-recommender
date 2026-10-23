@@ -73,14 +73,18 @@
       (atr[k] = atr[k] || {})[str(a.AttributeName)] = str(a.AttributeValue);
     });
 
-    // Count cartons per pallet per item (UnitQuantity 0 = picked, still listed on an emptied pallet)
-    var perPallet = {}, byUld = {}, cartons = 0, skippedPicked = 0;
+    // Count cartons per pallet per item (UnitQuantity 0 = picked, still listed on an emptied pallet).
+    // UnitQuantity is the carton's weight (6.60, 22.85...), so summing it gives the pallet's weight
+    // for weight-based orders.
+    var perPallet = {}, weightOf = {}, byUld = {}, cartons = 0, skippedPicked = 0;
     raw.cartons.forEach(function (c) {
       var id = str(c.ULDID), item = itemCode[str(c.ItemID)];
       if (!item || !barcode[id]) return;            // not this tenant/warehouse
       if (!(Number(c.UnitQuantity) > 0)) { skippedPicked++; return; }
       var p = perPallet[id] || (perPallet[id] = {});
       p[item] = (p[item] || 0) + 1;
+      var w = weightOf[id] || (weightOf[id] = {});
+      w[item] = (w[item] || 0) + Number(c.UnitQuantity);
       var prod = minusYears(day(c.BestBeforeDate), years) || 'no date';
       var bc = barcode[id];
       var u = byUld[bc] || (byUld[bc] = {});
@@ -100,7 +104,7 @@
           tenantCode: tenantName, itemCode: item, warehouseId: whCode,
           location: loc, uld: barcode[id],
           quantity: qty, availableQuantity: qty,
-          weight: a.CartonWeight ? Number(a.CartonWeight) : undefined,
+          weight: Math.round(weightOf[id][item] * 100) / 100,
           productionDate: parseDay(a.OldestCarton),
           establishment: a.EST || undefined,
           existingAllocation: a.Allocation || undefined,
@@ -111,11 +115,33 @@
       });
     });
 
+    // Normal orders sweep a whole location only if it holds a single item, so
+    // the recommender must see EVERY pallet in the locations it might touch -
+    // not just the items being ordered. raw.binLinks lists all pallets linked
+    // to those bins; any that isn't one of ours holds something else. Each is
+    // added as a placeholder row (no tenant, no quantity, never pickable) so
+    // the existing mixed-location check works exactly as with the ULD export.
+    var ours = {}, touchedBins = {}, others = 0;
+    Object.keys(perPallet).forEach(function (id) {
+      ours[id] = true;
+      if (binOf[id]) touchedBins[binOf[id]] = true;
+    });
+    (raw.binLinks || []).forEach(function (l) {
+      var id = str(l.ULDID), bin = str(l.BinID);
+      if (ours[id] || !touchedBins[bin] || !binCode[bin]) return;
+      stockRows.push({
+        _i: i++, raw: null, live: true, placeholder: true,
+        tenantCode: undefined, itemCode: '(other item)', warehouseId: whCode,
+        location: binCode[bin], uld: 'ULDID:' + id, quantity: 0, availableQuantity: 0
+      });
+      others++;
+    });
+
     var ulds = Object.keys(byUld).length;
     return {
       stockRows: stockRows,
       cartonDates: { found: true, byUld: byUld, cartons: cartons, ulds: ulds, source: 'live' },
-      stats: { pallets: stockRows.length, cartons: cartons, emptiedPallets: emptied, pickedCartonLines: skippedPicked }
+      stats: { pallets: stockRows.length - others, cartons: cartons, emptiedPallets: emptied, pickedCartonLines: skippedPicked, otherPalletsInSameLocations: others }
     };
   }
 
@@ -189,7 +215,18 @@
               });
             };
           }), conc)
-        ]).then(function (r3) { raw.links = r3[0]; raw.attrs = [].concat.apply([], r3[1]); });
+        ]).then(function (r3) {
+          raw.links = r3[0]; raw.attrs = [].concat.apply([], r3[1]);
+          // Every other pallet in the same bins (any tenant/item) - for the
+          // single-item-location check normal orders depend on.
+          var bins = {};
+          raw.links.forEach(function (l) { if (ids[str(l.ULDID)]) bins[str(l.BinID)] = true; });
+          var binParts = ranges(Object.keys(bins), 200);
+          say('Checking which locations are shared (' + Object.keys(bins).length + ' locations)…');
+          return pool(binParts.map(function (rg) {
+            return function () { return query('ULDB', 'BinID ge ' + q(rg[0]) + ' AND BinID le ' + q(rg[1])); };
+          }), conc).then(function (lists) { raw.binLinks = [].concat.apply([], lists); });
+        });
       });
     }).then(function () {
       var out = buildLiveStock(raw, opts);
