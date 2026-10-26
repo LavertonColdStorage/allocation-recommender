@@ -751,7 +751,18 @@
       } else {
         var withStock = days.filter(function (d) { return available(d) > 0; });
         if (withStock.length >= 2) {
-          var a = withStock[0], b = withStock[1];
+          // The oldest pair of days that fills the pallet; if no pair can,
+          // the pair that gets closest. Just taking the two oldest days can
+          // leave the order short when an older day + a newer one would fill
+          // it (13102 on 2645SY794386: 26 + 10 = 36, but 26 + 22 = 40).
+          var a = null, b = null, best = -1;
+          for (var x = 0; x < withStock.length && best < target; x++) {
+            for (var y = x + 1; y < withStock.length; y++) {
+              var got = Math.min(available(withStock[x]) + available(withStock[y]), target);
+              if (got > best) { best = got; a = withStock[x]; b = withStock[y]; }
+              if (got >= target) break;
+            }
+          }
           var takeA = Math.min(available(a), target);
           var takeB = Math.min(available(b), target - takeA);
           exceptionUsed = true;
