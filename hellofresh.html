@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HelloFresh Allocation - Laverton Cold Storage</title>
+<link rel="icon" href="Chilled-LavertonCS-1.png">
+<link rel="stylesheet" href="recommender.css">
+</head>
+<body data-mode="hellofresh">
+
+<div class="brandBar">
+  <img src="Chilled-LavertonCS-1.png" alt="Laverton Cold Storage">
+  <h1>HelloFresh Allocation</h1>
+  <p>40-carton pallets &middot; one item, one production day &middot; oldest first</p>
+</div>
+
+<header>
+  <div class="sub" id="sourceLine">Loading…</div>
+  <div class="spacer"></div>
+  <a href="index.html">&larr; Standard allocation recommender</a>
+</header>
+
+<main>
+  <div id="banner" class="banner empty">No stock data loaded yet - load a CSV below.</div>
+
+  <div class="panel" id="livePanel">
+    <h2>Load live stock from .wms</h2>
+    <p class="hint">Reads current stock straight from .wms for the item codes you list - allocations, holds, locations and
+      carton dates included, no exports needed. Then fills in the tenant, warehouse and one order line per code. Takes about
+      20–60 seconds depending on how many codes. The file upload below still works if this is unavailable.</p>
+    <div class="grid">
+      <div class="field"><label for="liveTenant">Tenant code</label><input type="text" id="liveTenant" value="HAZEL" placeholder="e.g. HAZEL, MID, JBS"></div>
+      <div class="field"><label for="liveWarehouse">Warehouse</label><input type="text" id="liveWarehouse" value="LEAKES"></div>
+      <div class="field" style="grid-column: span 2"><label for="liveItems">Item codes for this order</label>
+        <input type="text" id="liveItems" placeholder="comma-separated, e.g. 13084, 13085"></div>
+    </div>
+    <details class="advanced" id="liveSettings">
+      <summary>Connection (set once on this PC)</summary>
+      <div class="grid">
+        <div class="field"><label for="liveUrl">Worker URL</label><input type="url" id="liveUrl" placeholder="https://lcs-wms-query.matthew-rowe1982.workers.dev"></div>
+        <div class="field"><label for="liveToken">Access token</label><input type="password" id="liveToken" placeholder="the PAGE_TOKEN"></div>
+      </div>
+    </details>
+    <div class="actions">
+      <button id="loadLiveBtn" class="primary">Load live stock</button>
+      <button id="hfCodesBtn" type="button">Reset to HelloFresh codes</button>
+      <span class="sub" id="liveStatus"></span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Or: getting the export from dotWMS</h2>
+    <p class="hint">
+      Run <a href="https://au15.dotwms.com/?module=packing&amp;submodule=reporting_genericreports&amp;key=1341" target="_blank" rel="noopener">Stock On Hand – ULD</a>
+      in dotWMS (opens in a new tab - log in first if needed), filtered to the warehouse/tenant you need.
+      dotWMS exports this as <strong>.xlsx</strong>, not CSV - open it and use
+      <strong>File → Save As → CSV UTF-8 (Comma delimited) (*.csv)</strong> before loading it below.
+      A plain "CSV" save can mangle special characters; UTF-8 is the one that doesn't.
+    </p>
+  </div>
+
+  <div class="panel">
+    <h2>Load stock data from a file</h2>
+    <p class="hint">No API, no waiting on the nightly push - freshness is entirely up to when you last exported.</p>
+    <div class="grid">
+      <div class="field"><label for="stockFileInput">Stock on hand CSV</label><input type="file" id="stockFileInput" accept=".csv,text/csv"></div>
+    </div>
+    <div class="actions">
+      <button id="loadFilesBtn" class="primary">Load files</button>
+      <span class="sub" id="fileLoadStatus"></span>
+    </div>
+    <details class="advanced" id="fileDiagWrap" hidden>
+      <summary>Columns recognised in the stock file</summary>
+      <pre id="fileDiagOut" style="font-family: var(--mono); font-size: 12px; background: var(--bg); padding: 10px; border-radius: 8px; overflow-x: auto;"></pre>
+    </details>
+  </div>
+
+  <div class="panel">
+    <h2>Order</h2>
+    <p class="hint">HelloFresh rules: pallets of exactly 40 cartons, one item and one production day each, oldest day first.
+      Stored pallets may be broken down, and pallets in locations shared with other items are used (HelloFresh stock is double-deep only).
+      At most one pallet per item may mix two days, and only to complete the order. Older days that can't make a full 40 are flagged, not used.</p>
+    <div class="grid">
+      <div class="field"><label for="tenantSelect">Tenant</label><select id="tenantSelect"><option value="">Select tenant…</option></select></div>
+      <div class="field"><label for="warehouseSelect">Warehouse</label>
+        <select id="warehouseSelect"><option value="">Select warehouse…</option></select>
+      </div>
+      <div class="field"><label for="orderOldestDate">Default oldest allowable production date</label><input type="text" id="orderOldestDate" placeholder="YYYY-MM-DD, optional"></div>
+      <div class="field"><label for="orderEstablishment">Default establishment(s)</label><input type="text" id="orderEstablishment" placeholder="comma-separated, optional"></div>
+    </div>
+    <div id="hfDetailPanel">
+      <p class="hint" style="margin-bottom:8px">
+        If you loaded <strong>live stock</strong>, carton dates are already included - skip this. If you loaded the ULD export
+        from a file, you can optionally add the <strong>Stock On Hand – Detailed</strong> export (one row per carton). The ULD export only gives each
+        pallet its oldest carton's date; with the Detailed file loaded, a pallet holding two production days is split correctly.
+        Without it, each pallet is treated as all its oldest-carton date.
+      </p>
+      <div class="grid">
+        <div class="field"><label for="detailFileInput">Stock On Hand – Detailed CSV (optional)</label><input type="file" id="detailFileInput" accept=".csv,text/csv"></div>
+      </div>
+      <div class="actions" style="margin-top:8px">
+        <button id="loadDetailBtn">Load Detailed file</button>
+        <span class="sub" id="detailLoadStatus">Not loaded - using oldest-carton dates.</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Order lines</h2>
+    <table class="linesTable" id="linesTable">
+      <thead>
+        <tr>
+          <th class="itemCell">Item</th>
+          <th class="qtyCell">Required</th>
+          <th>Result</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="linesBody"></tbody>
+    </table>
+    <div class="actions">
+      <button id="addLineBtn">+ Add line</button>
+      <button id="checkAllBtn" class="primary">Check fulfilment - all lines</button>
+      <button id="downloadAllBtn" disabled>Download bulk allocation CSV - whole order</button>
+    </div>
+
+    <div class="stat-row" id="orderStats" hidden></div>
+  </div>
+
+  <div class="panel" id="hfLinesPanel" hidden>
+    <div class="actions" style="margin-top:0; float:right">
+      <button id="downloadLinesBtn">Download order lines CSV</button>
+    </div>
+    <h2>HelloFresh order lines for .wms</h2>
+    <p class="hint">Key these into <strong>Shipping → Create Manual Shipment Order</strong>, one line each, using only
+      <strong>Item Code, Preferred Pick ULD, Best Before Date and Quantity</strong>. Leave EST and the min/max date
+      filters blank, and if you use Allocation, put the <em>same</em> value on every line - .wms falls back to the first
+      line's value when they differ.</p>
+    <div id="hfLinesBody"></div>
+  </div>
+
+  <div class="panel" id="hfSheetPanel" hidden>
+    <div class="actions noPrint" style="margin-top:0; float:right">
+      <button id="printSheetBtn">Print build sheet</button>
+    </div>
+    <h2>HelloFresh pallet build sheet</h2>
+    <div id="hfSheetBody"></div>
+  </div>
+
+  <div class="panel" id="hfCheckPanel">
+    <h2>Pre-dispatch check (HelloFresh)</h2>
+    <p class="hint">Before the truck goes: in .wms open the job, export its <strong>Logistic Units</strong> table
+      (Excel or CSV) and load it here. Every pallet is checked - 40 cartons, one item, one best-before date, at most one
+      two-date pallet per item - and, if this page has a build plan, compared with the order lines above.</p>
+    <div class="grid">
+      <div class="field"><label for="luFileInput">Logistic Units export (.xlsx or .csv)</label><input type="file" id="luFileInput" accept=".xlsx,.xls,.csv,text/csv"></div>
+    </div>
+    <div class="actions" style="margin-top:8px">
+      <button id="checkShipmentBtn" class="primary">Check shipment</button>
+      <label class="sub"><input type="checkbox" id="comparePlanCheck" checked> compare with the order lines on this page</label>
+      <span class="sub" id="luStatus"></span>
+    </div>
+    <div id="luResult"></div>
+  </div>
+</main>
+
+<script src="checks.js"></script>
+<script src="allocation.js"></script>
+<script src="livestock.js"></script>
+<!-- Reads the .xlsx Logistic Units export for the HelloFresh pre-dispatch check. Optional: CSV works without it. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
+<script src="recommender.js"></script>
+</body>
+</html>
