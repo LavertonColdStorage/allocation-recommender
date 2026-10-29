@@ -26,6 +26,21 @@
   var lines = [];       // { id, itemCode, metric, qty, result }
   var nextLineId = 1;
 
+  // Daily export counter on the LCS Hub (hub.lavertoncs.com.au, Usage panel).
+  // Anonymous "+1, standard or HelloFresh" - no order data leaves the page.
+  // Fire-and-forget: no-cors + text/plain means no preflight, and a failure
+  // (offline, hub down) never gets in the way of the download.
+  var HUB_COUNT_URL = window.LCS_HUB_COUNT_URL || 'https://hub.lavertoncs.com.au/api/count';
+  function countExport() {
+    try {
+      fetch(HUB_COUNT_URL, {
+        method: 'POST', mode: 'no-cors', keepalive: true, credentials: 'omit',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ tool: HF ? 'allocation-hf' : 'allocation' })
+      }).catch(function () {});
+    } catch (e) { /* never block the export */ }
+  }
+
   function setBanner(kind, text) {
     var b = $('banner');
     b.className = 'banner ' + kind;
@@ -747,6 +762,7 @@
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(a.href);
+    countExport();
   });
 
   // -------------------------------------------------------------------------
