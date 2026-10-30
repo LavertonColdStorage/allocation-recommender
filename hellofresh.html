@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HelloFresh Allocation - Laverton Cold Storage</title>
 <link rel="icon" href="Chilled-LavertonCS-1.png">
-<link rel="stylesheet" href="recommender.css?v=20261030">
+<link rel="stylesheet" href="recommender.css?v=20261030b">
 </head>
 <body data-mode="hellofresh">
 
@@ -31,8 +31,8 @@
       20–60 seconds depending on how many codes. Leave the item codes blank to load all of the tenant's stock - slower
       (a minute or two), so to speed it up, enter just the codes you want. The file upload below still works if this is unavailable.</p>
     <div class="grid">
-      <div class="field"><label for="liveTenant">Tenant code</label><input type="text" id="liveTenant" value="HAZEL" placeholder="e.g. HAZEL, MID, JBS"></div>
-      <div class="field"><label for="liveWarehouse">Warehouse</label><input type="text" id="liveWarehouse" value="LEAKES"></div>
+      <div class="field"><label for="liveTenant">Tenant</label><select id="liveTenant"><option value="HAZEL">HAZEL</option></select></div>
+      <div class="field"><label for="liveWarehouse">Warehouse</label><select id="liveWarehouse"><option value="LEAKES">LEAKES</option></select></div>
       <div class="field" style="grid-column: span 2"><label for="liveItems">Item codes for this order</label>
         <input type="text" id="liveItems" placeholder="comma-separated, e.g. 13084, 13085 - blank = all items (slower)"></div>
     </div>
@@ -166,11 +166,11 @@
   </div>
 </main>
 
-<script src="checks.js?v=20261030"></script>
-<script src="allocation.js?v=20261030"></script>
-<script src="livestock.js?v=20261030"></script>
+<script src="checks.js?v=20261030b"></script>
+<script src="allocation.js?v=20261030b"></script>
+<script src="livestock.js?v=20261030b"></script>
 <!-- Reads the .xlsx Logistic Units export for the HelloFresh pre-dispatch check. Optional: CSV works without it. -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
-<script src="recommender.js?v=20261030"></script>
+<script src="recommender.js?v=20261030b"></script>
 </body>
 </html>

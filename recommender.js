@@ -102,7 +102,7 @@
   if (HF) {
     $('liveItems').value = HELLOFRESH_CODES;
     $('hfCodesBtn').addEventListener('click', function () {
-      $('liveTenant').value = 'HAZEL';
+      setSelect($('liveTenant'), 'HAZEL');
       $('liveItems').value = HELLOFRESH_CODES;
     });
   }
@@ -112,7 +112,8 @@
       var p = s[PAGE_KEY] || (PAGE_KEY === 'std' ? { tenant: s.tenant, items: s.items } : {});  // older single-page settings
       $('liveUrl').value = s.url || 'https://lcs-wms-query.matthew-rowe1982.workers.dev';
       if (s.token) $('liveToken').value = s.token;
-      if (p.tenant) $('liveTenant').value = p.tenant;
+      if (p.tenant) setSelect($('liveTenant'), p.tenant);
+      if (p.warehouse) setSelect($('liveWarehouse'), p.warehouse);
       if (p.items) $('liveItems').value = p.items;
       if (!s.token) $('liveSettings').open = true;
     } catch (e) { $('liveUrl').value = 'https://lcs-wms-query.matthew-rowe1982.workers.dev'; }
@@ -122,10 +123,49 @@
       var s = JSON.parse(localStorage.getItem(LIVE_KEY) || '{}');
       s.url = $('liveUrl').value.trim();
       s.token = $('liveToken').value.trim();
-      s[PAGE_KEY] = { tenant: $('liveTenant').value.trim(), items: $('liveItems').value.trim() };
+      s[PAGE_KEY] = { tenant: $('liveTenant').value, warehouse: $('liveWarehouse').value, items: $('liveItems').value.trim() };
       delete s.tenant; delete s.items;
       localStorage.setItem(LIVE_KEY, JSON.stringify(s));
     } catch (e) { /* private window etc. - fine, just not remembered */ }
+  }
+
+  /** Choose `value` in a select, adding it as an option if the list doesn't have it (yet). */
+  function setSelect(sel, value) {
+    if (!value) return;
+    var has = [].some.call(sel.options, function (o) { return o.value === value; });
+    if (!has) { var o = document.createElement('option'); o.value = value; o.textContent = value; sel.appendChild(o); }
+    sel.value = value;
+  }
+
+  /**
+   * Tenant and warehouse dropdowns, filled from .wms (active ones only) once
+   * the connection is set. Until then - or if it fails - each holds just the
+   * page's default, so loading still works.
+   */
+  function fillLiveLists() {
+    var base = $('liveUrl').value.trim().replace(/\/+$/, ''), token = $('liveToken').value.trim();
+    if (!base || !token) return;
+    var query = liveQuery(base, token);
+    function fill(sel, rows, code, name) {
+      var keep = sel.value;
+      rows = rows.filter(function (r) { return String(r.IsActive) !== '0'; })
+        .sort(function (a, b) { return String(a[name]).localeCompare(String(b[name])); });
+      if (!rows.length) return;
+      sel.innerHTML = '';
+      rows.forEach(function (r) {
+        var o = document.createElement('option');
+        o.value = r[code];
+        o.textContent = r[name] && r[name] !== r[code] ? r[name] + ' (' + r[code] + ')' : r[code];
+        sel.appendChild(o);
+      });
+      setSelect(sel, keep);
+    }
+    Promise.all([query('TNT'), query('WHS')]).then(function (r) {
+      fill($('liveTenant'), r[0], 'TenantCode', 'TenantName');
+      fill($('liveWarehouse'), r[1], 'WarehouseCode', 'WarehouseName');
+    }).catch(function (err) {
+      $('liveStatus').textContent = 'Could not load the tenant list (' + err.message + ').';
+    });
   }
 
   /** One Query API table through the Worker, paging 25,000 rows at a time, backing off on 429. */
@@ -153,6 +193,12 @@
     };
   }
 
+  fillLiveLists();
+  $('liveToken').addEventListener('change', fillLiveLists);
+  $('liveUrl').addEventListener('change', fillLiveLists);
+  $('liveTenant').addEventListener('change', saveLive);
+  $('liveWarehouse').addEventListener('change', saveLive);
+
   $('loadLiveBtn').addEventListener('click', function () {
     var base = $('liveUrl').value.trim().replace(/\/+$/, ''), token = $('liveToken').value.trim();
     var codes = $('liveItems').value.split(/[\s,;]+/).map(function (s) { return s.trim(); }).filter(Boolean);
@@ -161,8 +207,8 @@
     var btn = $('loadLiveBtn'); btn.disabled = true;
     LiveStock.loadLiveStock({
       query: liveQuery(base, token),
-      tenantCode: $('liveTenant').value.trim().toUpperCase(),
-      warehouseCode: $('liveWarehouse').value.trim().toUpperCase(),
+      tenantCode: $('liveTenant').value,
+      warehouseCode: $('liveWarehouse').value,
       itemCodes: codes,
       onProgress: function (t) { $('liveStatus').textContent = t; }
     }).then(function (out) {

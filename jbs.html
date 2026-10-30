@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>JBS Pork Allocation - Laverton Cold Storage</title>
 <link rel="icon" href="Chilled-LavertonCS-1.png">
-<link rel="stylesheet" href="recommender.css?v=20261030">
+<link rel="stylesheet" href="recommender.css?v=20261030b">
 </head>
 <body data-mode="jbs">
 
@@ -32,8 +32,8 @@
       or two), so to speed it up, enter just the codes you want. JBS Pork orders need live stock: the blast-zone and 80-hour rules use each
       pallet's zone and scan-in time, which the ULD export doesn't have.</p>
     <div class="grid">
-      <div class="field"><label for="liveTenant">Tenant code</label><input type="text" id="liveTenant" value="JBSPORK"></div>
-      <div class="field"><label for="liveWarehouse">Warehouse</label><input type="text" id="liveWarehouse" value="LEAKES"></div>
+      <div class="field"><label for="liveTenant">Tenant</label><select id="liveTenant"><option value="JBSPORK">JBSPORK</option></select></div>
+      <div class="field"><label for="liveWarehouse">Warehouse</label><select id="liveWarehouse"><option value="LEAKES">LEAKES</option></select></div>
       <div class="field" style="grid-column: span 2"><label for="liveItems">Item codes for this order</label>
         <input type="text" id="liveItems" placeholder="comma-separated - to speed it up, enter just the codes you want (blank = all)"></div>
     </div>
@@ -90,9 +90,9 @@
 
 </main>
 
-<script src="checks.js?v=20261030"></script>
-<script src="allocation.js?v=20261030"></script>
-<script src="livestock.js?v=20261030"></script>
-<script src="recommender.js?v=20261030"></script>
+<script src="checks.js?v=20261030b"></script>
+<script src="allocation.js?v=20261030b"></script>
+<script src="livestock.js?v=20261030b"></script>
+<script src="recommender.js?v=20261030b"></script>
 </body>
 </html>
