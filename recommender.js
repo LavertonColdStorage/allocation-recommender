@@ -40,7 +40,7 @@
       fetch(HUB_COUNT_URL, {
         method: 'POST', mode: 'no-cors', keepalive: true, credentials: 'omit',
         headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ tool: HF ? 'allocation-hf' : 'allocation' })
+        body: JSON.stringify({ tool: HF ? 'allocation-hf' : JBS ? 'allocation-jbs' : 'allocation' })
       }).catch(function () {});
     } catch (e) { /* never block the export */ }
   }
