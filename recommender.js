@@ -2,14 +2,18 @@
  * Page logic for both recommender pages:
  *   allocation-recommender.html (index.html live) - standard orders
  *   hellofresh.html                               - HelloFresh 40-carton orders
- * Which one is running comes from <body data-mode="hellofresh">. The
+ *   jbs.html                                      - JBS Pork (standard rules +
+ *                                                   blast zone / 80-hour rules)
+ * Which one is running comes from <body data-mode="hellofresh|jbs">. The
  * HelloFresh panels only exist on that page, so everything touching them is
- * behind HF.
+ * behind HF. The JBS page is live-stock only (its rules need the zone and
+ * scan-in time, which the ULD export doesn't carry), so it has no file panels.
  */
 (function () {
   'use strict';
 
-  var HF = document.body.getAttribute('data-mode') === 'hellofresh';
+  var MODE = document.body.getAttribute('data-mode') || 'standard';
+  var HF = MODE === 'hellofresh', JBS = MODE === 'jbs';
 
   if (typeof StockChecks === 'undefined' || typeof AllocationRecommender === 'undefined') {
     document.getElementById('banner').className = 'banner error';
@@ -85,14 +89,14 @@
     });
   }
 
-  $('loadFilesBtn').addEventListener('click', loadFromFiles);
+  if ($('loadFilesBtn')) $('loadFilesBtn').addEventListener('click', loadFromFiles);
 
   // ---- Live stock from .wms (via the lcs-wms-query Worker) -----------------
   // Connection is shared by both pages (same origin); tenant and item codes
   // are remembered per page, so the HelloFresh codes don't land on the
   // standard page and vice versa.
   var LIVE_KEY = 'lcs.allocation.live';
-  var PAGE_KEY = HF ? 'hf' : 'std';
+  var PAGE_KEY = HF ? 'hf' : JBS ? 'jbs' : 'std';
   // Current HelloFresh codes (Hazeldenes) - "subject to change", per Matt 2026-10-22.
   var HELLOFRESH_CODES = '13084, 13085, 13086, 13097, 13098, 13099, 13100, 13102, 13103, 13104';
   if (HF) {
@@ -105,7 +109,7 @@
   (function restoreLive() {
     try {
       var s = JSON.parse(localStorage.getItem(LIVE_KEY) || '{}');
-      var p = s[PAGE_KEY] || (HF ? {} : { tenant: s.tenant, items: s.items });  // older single-page settings
+      var p = s[PAGE_KEY] || (PAGE_KEY === 'std' ? { tenant: s.tenant, items: s.items } : {});  // older single-page settings
       $('liveUrl').value = s.url || 'https://lcs-wms-query.matthew-rowe1982.workers.dev';
       if (s.token) $('liveToken').value = s.token;
       if (p.tenant) $('liveTenant').value = p.tenant;
@@ -185,7 +189,7 @@
       renderLines();
       renderHfSheet();
     }).catch(function (err) {
-      $('liveStatus').textContent = 'Live load failed: ' + err.message + ' - the file uploads still work.';
+      $('liveStatus').textContent = 'Live load failed: ' + err.message + (JBS ? '' : ' - the file uploads still work.');
     }).then(function () { btn.disabled = false; });
   });
 
@@ -381,7 +385,8 @@
 
   function showNoDataYet() {
     state.stockRows = [];
-    setBanner('empty', 'No stock data loaded yet - load a CSV below, or load live stock from .wms.');
+    setBanner('empty', JBS ? 'No stock loaded yet - load live stock from .wms below.' :
+      'No stock data loaded yet - load a CSV below, or load live stock from .wms.');
     $('sourceLine').textContent = 'No data loaded';
     populateWarehouses();
     populateTenants();
@@ -605,6 +610,7 @@
       request.cartonDates = state.cartonDates;
       line.result = AR.recommendHelloFresh(state.stockRows, request);
     } else {
+      if (JBS) request.exclude = AR.jbsPorkExclusions({ now: new Date() });
       line.result = AR.recommendAllocation(state.stockRows, request);
     }
     renderLineResult(line);

@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JBS Pork Allocation - Laverton Cold Storage</title>
+<link rel="icon" href="Chilled-LavertonCS-1.png">
+<link rel="stylesheet" href="recommender.css">
+</head>
+<body data-mode="jbs">
+
+<div class="brandBar">
+  <img src="Chilled-LavertonCS-1.png" alt="Laverton Cold Storage">
+  <h1>JBS Pork Allocation</h1>
+  <p>Standard oldest-first rules &middot; no blast zone &middot; nothing scanned in the last 80 hours</p>
+</div>
+
+<header>
+  <div class="sub" id="sourceLine">Loading…</div>
+  <div class="spacer"></div>
+  <a href="index.html">&larr; Standard allocation recommender</a>
+</header>
+
+<main>
+  <div id="banner" class="banner empty">No stock loaded yet - load live stock from .wms below.</div>
+
+  <div class="panel" id="livePanel">
+    <h2>Load live stock from .wms</h2>
+    <p class="hint">Reads current stock straight from .wms for the item codes you list - allocations, holds, locations and
+      carton dates included, no exports needed. Then fills in the tenant, warehouse and one order line per code. Takes about
+      20–60 seconds depending on how many codes. JBS Pork orders need live stock: the blast-zone and 80-hour rules use each
+      pallet's zone and scan-in time, which the ULD export doesn't have.</p>
+    <div class="grid">
+      <div class="field"><label for="liveTenant">Tenant code</label><input type="text" id="liveTenant" value="JBSPORK"></div>
+      <div class="field"><label for="liveWarehouse">Warehouse</label><input type="text" id="liveWarehouse" value="LEAKES"></div>
+      <div class="field" style="grid-column: span 2"><label for="liveItems">Item codes for this order</label>
+        <input type="text" id="liveItems" placeholder="comma-separated item codes"></div>
+    </div>
+    <details class="advanced" id="liveSettings">
+      <summary>Connection (set once on this PC)</summary>
+      <div class="grid">
+        <div class="field"><label for="liveUrl">Worker URL</label><input type="url" id="liveUrl" placeholder="https://lcs-wms-query.matthew-rowe1982.workers.dev"></div>
+        <div class="field"><label for="liveToken">Access token</label><input type="password" id="liveToken" placeholder="the PAGE_TOKEN"></div>
+      </div>
+    </details>
+    <div class="actions">
+      <button id="loadLiveBtn" class="primary">Load live stock</button>
+      <span class="sub" id="liveStatus"></span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Order</h2>
+    <p class="hint">Standard rules - oldest production date first, whole ULDs, whole locations touched, mixed-SKU locations
+      excluded, no DAMAGE / Damaged / Quarantine - plus the JBS Pork rules:
+      <strong>nothing in the blast zone (D4RBLAST)</strong>, and <strong>nothing scanned in during the last 80 hours</strong>
+      unless every carton on the pallet is more than 2 weeks old. Pallets kept out by these rules are listed under each line.</p>
+    <div class="grid">
+      <div class="field"><label for="tenantSelect">Tenant</label><select id="tenantSelect"><option value="">Select tenant…</option></select></div>
+      <div class="field"><label for="warehouseSelect">Warehouse</label>
+        <select id="warehouseSelect"><option value="">Select warehouse…</option></select>
+      </div>
+      <div class="field"><label for="orderOldestDate">Default oldest allowable production date</label><input type="text" id="orderOldestDate" placeholder="YYYY-MM-DD, optional"></div>
+      <div class="field"><label for="orderEstablishment">Default establishment(s)</label><input type="text" id="orderEstablishment" placeholder="comma-separated, optional"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Order lines</h2>
+    <table class="linesTable" id="linesTable">
+      <thead>
+        <tr>
+          <th class="itemCell">Item</th>
+          <th class="qtyCell">Required</th>
+          <th>Result</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="linesBody"></tbody>
+    </table>
+    <div class="actions">
+      <button id="addLineBtn">+ Add line</button>
+      <button id="checkAllBtn" class="primary">Check fulfilment - all lines</button>
+      <button id="downloadAllBtn" disabled>Download bulk allocation CSV - whole order</button>
+    </div>
+
+    <div class="stat-row" id="orderStats" hidden></div>
+  </div>
+
+</main>
+
+<script src="checks.js"></script>
+<script src="allocation.js"></script>
+<script src="livestock.js"></script>
+<script src="recommender.js"></script>
+</body>
+</html>

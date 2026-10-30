@@ -265,6 +265,9 @@
    *     this is a customer freshness requirement, not an efficiency knob.
    *   .establishment (optional) — a single code or array of acceptable
    *     codes. Stock from any other establishment is not eligible at all.
+   *   .exclude (optional) — function(row) -> array of reasons. A customer's
+   *     site rules (e.g. jbsPorkExclusions). A pallet with any reason is not
+   *     picked and is listed with the other excluded pallets.
    * @param {Object} [config]
    */
   function recommendAllocation(rows, request, config) {
@@ -296,6 +299,9 @@
     var allowedEstablishments = request.establishment
       ? (Array.isArray(request.establishment) ? request.establishment : [request.establishment])
       : null;
+    function extraReasons(r) {
+      return typeof request.exclude === 'function' ? (request.exclude(r) || []) : [];
+    }
 
     // Physically present (right warehouse, not despatched/cancelled) — used
     // for mixed-location detection, which has to see everything actually
@@ -346,7 +352,8 @@
     }
 
     function isPickableSpot(r) {
-      return !!r.uld && isRealLocation(r.location) && isSellableDisposition(r) && isEligiblePalletType(r);
+      return !!r.uld && isRealLocation(r.location) && isSellableDisposition(r) && isEligiblePalletType(r) &&
+        !extraReasons(r).length;
     }
 
     var candidates = allLive.filter(function (r) {
@@ -379,7 +386,7 @@
       if (r.disposition && blockedDispositions[String(r.disposition).toUpperCase()]) reasons.push(r.disposition + ' disposition');
       if (r.palletType && blockedPalletTypes[String(r.palletType).toUpperCase()]) reasons.push('Mixed pallet');
       if (r.existingAllocation) reasons.push('Already allocated (' + r.existingAllocation + ')');
-      return reasons;
+      return reasons.concat(extraReasons(r));
     }
     var flagged = allWithQty.filter(function (r) {
       return isTargetItem(r) && !!r.uld && meetsHardRequirements(r) && flagReasons(r).length > 0;
@@ -640,6 +647,42 @@
       if (best !== -1) { takes.push({ src: pool[best], take: left }); left = 0; }
     }
     return takes;
+  }
+
+  /**
+   * JBS Pork site rules (Matt, 2026-10-30), on top of the standard rules:
+   *  - nothing in Warehouse Zone D4RBLAST - the blast freezer, stock still
+   *    freezing (DAMAGE / Damaged / Quarantine are already standard);
+   *  - nothing scanned in during the last 80 hours, UNLESS every carton on
+   *    the pallet is more than 2 weeks old (newest carton date) - older stock
+   *    arriving from elsewhere is already frozen.
+   * Rows need .zone, .receivedAt (when the pallet was scanned in) and
+   * .newestCartonDate - live stock supplies all three. A recent pallet with
+   * no carton date is excluded (can't prove it's old). A pallet with no scan
+   * time can't be judged and is let through; the page warns about that.
+   * Returns a function for request.exclude.
+   */
+  function jbsPorkExclusions(opts) {
+    opts = opts || {};
+    var now = opts.now || new Date();
+    var hours = opts.recentHours || 80, oldDays = opts.oldCartonDays || 14;
+    var zones = (opts.blockedZones || ['D4RBLAST']).map(function (z) { return z.toUpperCase(); });
+    return function (r) {
+      var reasons = [];
+      if (r.zone && zones.indexOf(String(r.zone).toUpperCase()) !== -1) reasons.push('Blast zone (' + r.zone + ')');
+      if (r.receivedAt) {
+        var ageH = (now - r.receivedAt) / 3600000;
+        if (ageH < hours) {
+          var cartonDays = r.newestCartonDate ? (now - r.newestCartonDate) / 86400000 : null;
+          if (cartonDays === null || cartonDays <= oldDays) {
+            reasons.push('Scanned in ' + Math.max(0, Math.floor(ageH)) + 'h ago (under ' + hours + 'h)' +
+              (cartonDays === null ? ', no carton date' :
+                ', newest carton ' + r.newestCartonDate.toISOString().slice(0, 10) + ' is not over ' + oldDays + ' days old'));
+          }
+        }
+      }
+      return reasons;
+    };
   }
 
   /**
@@ -1015,6 +1058,7 @@
     DEFAULT_CONFIG: DEFAULT_CONFIG,
     recommendAllocation: recommendAllocation,
     recommendHelloFresh: recommendHelloFresh,
+    jbsPorkExclusions: jbsPorkExclusions,
     buildCartonDateIndex: buildCartonDateIndex,
     helloFreshOrderLines: helloFreshOrderLines,
     orderLinesToCsv: orderLinesToCsv,

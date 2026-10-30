@@ -34,6 +34,11 @@
     var md = key.slice(5);
     return (Number(key.slice(0, 4)) - years) + '-' + md;
   }
+  // ULD.CreateDateUTC "2026-10-30 04:28:11" -> Date (when the pallet was scanned in).
+  function parseUtc(v) {
+    var m = str(v).match(/^(\d{4})-(\d\d)-(\d\d)[ T](\d\d):(\d\d):(\d\d)/);
+    return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])) : undefined;
+  }
   function parseDay(key) {
     var m = str(key).match(/^(\d{4})-(\d\d)-(\d\d)/);
     return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])) : undefined;
@@ -61,10 +66,16 @@
     var whCode = str(raw.warehouse.WarehouseCode);
     var itemCode = {};
     raw.items.forEach(function (i) { itemCode[str(i.ItemID)] = str(i.ItemCode); });
-    var barcode = {};
-    raw.ulds.forEach(function (u) { barcode[str(u.ULDID)] = str(u.Barcode); });
-    var binCode = {};
-    raw.bins.forEach(function (b) { binCode[str(b.BinID)] = str(b.BinCode); });
+    var barcode = {}, created = {};
+    raw.ulds.forEach(function (u) {
+      barcode[str(u.ULDID)] = str(u.Barcode);
+      created[str(u.ULDID)] = parseUtc(u.CreateDateUTC);
+    });
+    var binCode = {}, binZone = {};
+    raw.bins.forEach(function (b) {
+      binCode[str(b.BinID)] = str(b.BinCode);
+      binZone[str(b.BinID)] = str(b.WarehouseZone);
+    });
     var binOf = {};
     raw.links.forEach(function (l) { binOf[str(l.ULDID)] = str(l.BinID); });
     var atr = {};
@@ -76,7 +87,7 @@
     // Count cartons per pallet per item (UnitQuantity 0 = picked, still listed on an emptied pallet).
     // UnitQuantity is the carton's weight (6.60, 22.85...), so summing it gives the pallet's weight
     // for weight-based orders.
-    var perPallet = {}, weightOf = {}, byUld = {}, cartons = 0, skippedPicked = 0;
+    var perPallet = {}, weightOf = {}, byUld = {}, newest = {}, cartons = 0, skippedPicked = 0;
     raw.cartons.forEach(function (c) {
       var id = str(c.ULDID), item = itemCode[str(c.ItemID)];
       if (!item || !barcode[id]) return;            // not this tenant/warehouse
@@ -86,6 +97,14 @@
       var w = weightOf[id] || (weightOf[id] = {});
       w[item] = (w[item] || 0) + Number(c.UnitQuantity);
       var prod = minusYears(day(c.BestBeforeDate), years) || 'no date';
+      // Newest carton date per pallet and item, for "scanned in recently but
+      // the stock is old" rules (JBS Pork). JBS cartons carry PackagingDate,
+      // HelloFresh ones only a best before.
+      var cd = day(c.PackagingDate) || day(c.ProductionDate) || (prod !== 'no date' ? prod : '');
+      if (cd) {
+        var nk = id + '|' + item;
+        if (!newest[nk] || cd > newest[nk]) newest[nk] = cd;
+      }
       var bc = barcode[id];
       var u = byUld[bc] || (byUld[bc] = {});
       u[prod] = (u[prod] || 0) + 1;
@@ -110,7 +129,10 @@
           existingAllocation: a.Allocation || undefined,
           palletStatus: a.PalletStatus || undefined,
           disposition: a.Disposition || undefined,
-          palletType: a.PalletType || undefined
+          palletType: a.PalletType || undefined,
+          zone: binOf[id] ? (binZone[binOf[id]] || undefined) : undefined,
+          receivedAt: created[id],
+          newestCartonDate: parseDay(newest[id + '|' + item])
         });
       });
     });
