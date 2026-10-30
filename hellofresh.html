@@ -28,12 +28,13 @@
     <h2>Load live stock from .wms</h2>
     <p class="hint">Reads current stock straight from .wms for the item codes you list - allocations, holds, locations and
       carton dates included, no exports needed. Then fills in the tenant, warehouse and one order line per code. Takes about
-      20–60 seconds depending on how many codes. The file upload below still works if this is unavailable.</p>
+      20–60 seconds depending on how many codes. Leave the item codes blank to load all of the tenant's stock - slower
+      (a minute or two), so to speed it up, enter just the codes you want. The file upload below still works if this is unavailable.</p>
     <div class="grid">
       <div class="field"><label for="liveTenant">Tenant code</label><input type="text" id="liveTenant" value="HAZEL" placeholder="e.g. HAZEL, MID, JBS"></div>
       <div class="field"><label for="liveWarehouse">Warehouse</label><input type="text" id="liveWarehouse" value="LEAKES"></div>
       <div class="field" style="grid-column: span 2"><label for="liveItems">Item codes for this order</label>
-        <input type="text" id="liveItems" placeholder="comma-separated, e.g. 13084, 13085"></div>
+        <input type="text" id="liveItems" placeholder="comma-separated, e.g. 13084, 13085 - blank = all items (slower)"></div>
     </div>
     <details class="advanced" id="liveSettings">
       <summary>Connection (set once on this PC)</summary>

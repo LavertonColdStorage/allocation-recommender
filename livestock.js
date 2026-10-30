@@ -185,7 +185,8 @@
   /**
    * Fetch everything and build. opts:
    *   query(table, where, join) -> Promise<rows[]>   (pages through results itself)
-   *   tenantCode ('HAZEL'), warehouseCode ('LEAKES'), itemCodes ([...])
+   *   tenantCode ('HAZEL'), warehouseCode ('LEAKES'), itemCodes ([...] - empty
+   *   = every item the tenant has, one ULD1 call each, so it's slower)
    *   onProgress(text), concurrency (default 4)
    */
   function loadLiveStock(opts) {
@@ -200,16 +201,23 @@
       if (!r[1].length) throw new Error('Warehouse ' + opts.warehouseCode + ' not found in .wms');
       raw.tenant = r[0][0]; raw.warehouse = r[1][0];
       var tid = raw.tenant.TenantID, wid = raw.warehouse.WarehouseID;
-      say('Looking up ' + opts.itemCodes.length + ' item codes…');
-      return pool(opts.itemCodes.map(function (code) {
+      var codes = opts.itemCodes || [];
+      say(codes.length ? 'Looking up ' + codes.length + ' item codes…' : 'Listing every item for ' + opts.tenantCode + '…');
+      return (codes.length ? pool(codes.map(function (code) {
         return function () { return query('ITM', 'TenantID eq ' + q(tid) + ' AND ItemCode eq ' + q(code)); };
-      }), conc).then(function (lists) {
+      }), conc) : query('ITM', 'TenantID eq ' + q(tid)).then(function (all) { return [all]; })).then(function (lists) {
         raw.items = [].concat.apply([], lists);
-        if (!raw.items.length) throw new Error('None of those item codes exist for ' + opts.tenantCode);
-        say('Reading cartons…');
+        if (!raw.items.length) throw new Error(codes.length ? 'None of those item codes exist for ' + opts.tenantCode : 'No items found for ' + opts.tenantCode);
+        var read = 0;
+        say('Reading cartons for ' + raw.items.length + ' item(s)…');
         return Promise.all([
           pool(raw.items.map(function (it) {
-            return function () { return query('ULD1', 'ItemID eq ' + q(it.ItemID)); };
+            return function () {
+              return query('ULD1', 'ItemID eq ' + q(it.ItemID)).then(function (rows) {
+                read++; if (!codes.length) say('Reading cartons… ' + read + ' of ' + raw.items.length + ' items');
+                return rows;
+              });
+            };
           }), conc),
           query('ULD', 'TenantID eq ' + q(tid) + ' AND WarehouseID eq ' + q(wid)),
           query('BIN', 'WarehouseID eq ' + q(wid))
@@ -256,6 +264,7 @@
       out.stats.loadedAt = new Date();
       out.stats.tenantName = str(raw.tenant.TenantName || raw.tenant.TenantCode).toUpperCase();
       out.stats.warehouseCode = str(raw.warehouse.WarehouseCode);
+      out.stats.items = raw.items.length;
       return out;
     });
   }

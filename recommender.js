@@ -157,7 +157,6 @@
     var base = $('liveUrl').value.trim().replace(/\/+$/, ''), token = $('liveToken').value.trim();
     var codes = $('liveItems').value.split(/[\s,;]+/).map(function (s) { return s.trim(); }).filter(Boolean);
     if (!base || !token) { $('liveSettings').open = true; $('liveStatus').textContent = 'Enter the Worker URL and access token first.'; return; }
-    if (!codes.length) { $('liveStatus').textContent = 'Enter at least one item code.'; return; }
     saveLive();
     var btn = $('loadLiveBtn'); btn.disabled = true;
     LiveStock.loadLiveStock({
@@ -171,7 +170,8 @@
       state.cartonDates = out.cartonDates;
       var when = out.stats.loadedAt.toLocaleTimeString();
       setBanner('live', 'Live from .wms at ' + when + ' - ' + out.stats.pallets + ' pallets, ' + out.stats.cartons +
-        ' cartons of ' + codes.length + ' code(s), allocations and holds included.');
+        ' cartons of ' + (codes.length ? codes.length + ' code(s)' : 'all ' + out.stats.items + ' item codes') +
+        ', allocations and holds included.');
       $('sourceLine').textContent = 'Live .wms ' + when;
       if (HF) $('detailLoadStatus').textContent = 'Carton dates come from the live load (' + when + ') - no Detailed file needed.';
       $('liveStatus').textContent = 'Loaded ' + out.stats.pallets + ' pallets in ' + out.stats.seconds + 's.';
@@ -186,6 +186,8 @@
       codes.forEach(function (c) {
         if (!have[c]) lines.push({ id: nextLineId++, itemCode: c, metric: 'quantity', qty: null, result: null });
       });
+      // Loaded everything: no line per code - pick items from the dropdowns.
+      if (!lines.length) lines.push({ id: nextLineId++, itemCode: '', metric: 'quantity', qty: null, result: null });
       renderLines();
       renderHfSheet();
     }).catch(function (err) {

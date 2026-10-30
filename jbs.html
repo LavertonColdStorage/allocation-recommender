@@ -28,13 +28,14 @@
     <h2>Load live stock from .wms</h2>
     <p class="hint">Reads current stock straight from .wms for the item codes you list - allocations, holds, locations and
       carton dates included, no exports needed. Then fills in the tenant, warehouse and one order line per code. Takes about
-      20–60 seconds depending on how many codes. JBS Pork orders need live stock: the blast-zone and 80-hour rules use each
+      20–60 seconds depending on how many codes. Leave the item codes blank to load all JBS Pork stock - slower (a minute
+      or two), so to speed it up, enter just the codes you want. JBS Pork orders need live stock: the blast-zone and 80-hour rules use each
       pallet's zone and scan-in time, which the ULD export doesn't have.</p>
     <div class="grid">
       <div class="field"><label for="liveTenant">Tenant code</label><input type="text" id="liveTenant" value="JBSPORK"></div>
       <div class="field"><label for="liveWarehouse">Warehouse</label><input type="text" id="liveWarehouse" value="LEAKES"></div>
       <div class="field" style="grid-column: span 2"><label for="liveItems">Item codes for this order</label>
-        <input type="text" id="liveItems" placeholder="comma-separated item codes"></div>
+        <input type="text" id="liveItems" placeholder="comma-separated - to speed it up, enter just the codes you want (blank = all)"></div>
     </div>
     <details class="advanced" id="liveSettings">
       <summary>Connection (set once on this PC)</summary>
